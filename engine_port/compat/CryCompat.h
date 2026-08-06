@@ -152,8 +152,35 @@ struct MEMORYSTATUS {
 	unsigned int dwLength, dwMemoryLoad;
 	size_t dwTotalPhys, dwAvailPhys, dwTotalPageFile, dwAvailPageFile, dwTotalVirtual, dwAvailVirtual;
 };
+/* glibc-specific name (LinuxSpecific.h maps _finite -> __finite); written
+   directly (not via isfinite()) to avoid a <cmath>/<math.h> feature-test-
+   macro dependency on newlib. */
+inline int __finite(double x) { return x == x && x != 1.0/0.0 && x != -1.0/0.0; }
+
 inline bool DeleteFile(const char *lpFileName) { return remove(lpFileName) == 0; }
 inline bool RemoveDirectory(const char *lpPathName) { return rmdir(lpPathName) == 0; }
+inline bool SetFileAttributes(const char * /*lpFileName*/, unsigned int /*attrs*/) { return true; }
+
+/* Never actually valid to implement portably (there's no way to safely
+   probe arbitrary memory without risking a fault) -- always reporting
+   "readable" matches how most homebrew ports of this engine generation
+   treat this debug-only Win32 sanity check. */
+inline bool IsBadReadPtr(void *ptr, unsigned int /*size*/) { return ptr == 0; }
+
+inline char *ltoa(long value, char *buf, int base) {
+	if (base == 10) sprintf(buf, "%ld", value);
+	else if (base == 16) sprintf(buf, "%lx", value);
+	else sprintf(buf, "%ld", value);
+	return buf;
+}
+
+inline void _makepath(char *path, const char *drive, const char *dir, const char *filename, const char *ext) {
+	path[0] = 0;
+	if (drive && drive[0]) { strcat(path, drive); }
+	if (dir && dir[0]) { strcat(path, dir); }
+	if (filename) strcat(path, filename);
+	if (ext && ext[0]) { if (ext[0] != '.') strcat(path, "."); strcat(path, ext); }
+}
 
 inline void GlobalMemoryStatus(MEMORYSTATUS *lpmem) {
 	/* Real Vita RAM figures (sceKernelGetFreeMemorySize) belong here once
