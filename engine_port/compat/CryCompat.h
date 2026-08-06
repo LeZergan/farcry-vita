@@ -123,6 +123,8 @@ inline char *_strlwr(char *s) { return strlwr(s); }
    LinuxSpecific.h already no-ops __cdecl/__stdcall/etc. the same way,
    this one just isn't among them. */
 #define __declspec(x)
+#define RemoveCRLF(...) ((void)0)
+inline bool compareTextFileStrings(const char *a, const char *b) { return strcmp(a, b) == 0; }
 
 /* Overlapped-file-I/O emulation constants (safe to declare here -- no
    HANDLE/class-template dependency). The function DECLARATIONS that need
