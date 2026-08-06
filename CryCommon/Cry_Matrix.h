@@ -1940,14 +1940,13 @@ template<class F,int SI,int SJ> struct Matrix44_tpl {
    does not perform. */
 Matrix44_tpl<f32,4,1> GetTransposed44( const Matrix44_tpl<f32,4,1>& m );
 
-/* Same hidden-friend issue, one more time: friend of Matrix44_tpl but
-   takes Vec3_tpl<F> args, so ADL on the argument never finds it. This one
-   genuinely is only ever called with F=f32 in practice, so a template
-   declaration (matching the friend's own template parameter, valid
-   because the argument type directly names F) works here unlike
-   GetTransposed44 above. */
-template <class F>
-Matrix44_tpl<F,4,1> GetTranslationMat( const Vec3_tpl<F>& v );
+/* Correction: a template declaration compiles but doesn't LINK -- the
+   actual friend is a non-template hidden friend injected per class
+   instantiation (a distinct entity from a real function template even
+   when the signature matches), same subtlety as GetTransposed44 above.
+   Concrete declaration, matching the only instantiation actually used
+   (F=f32) and its real generated symbol. */
+Matrix44_tpl<f32,4,1> GetTranslationMat( const Vec3_tpl<f32>& v );
 
 
 //----------------------------------------------------------------------------------

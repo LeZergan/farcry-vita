@@ -95,6 +95,78 @@ int GetOverlappedResult(HANDLE /*hFile*/, void *lpOverlapped, unsigned int *lpNu
 	return 1; /* TRUE: the (synchronous, already-complete) read succeeded */
 }
 
+#include <pthread.h>
+
+EVENT_HANDLE CreateEvent(void *, bool /*bManualReset*/, bool bInitialState, const char *) {
+	_CryEvent *e = new _CryEvent();
+	pthread_mutex_init(&e->mutex, 0);
+	pthread_cond_init(&e->cond, 0);
+	e->signaled = bInitialState;
+	return e;
+}
+bool SetEvent(EVENT_HANDLE hEvent) {
+	pthread_mutex_lock(&hEvent->mutex);
+	hEvent->signaled = true;
+	pthread_cond_broadcast(&hEvent->cond);
+	pthread_mutex_unlock(&hEvent->mutex);
+	return true;
+}
+bool ResetEvent(EVENT_HANDLE hEvent) {
+	pthread_mutex_lock(&hEvent->mutex);
+	hEvent->signaled = false;
+	pthread_mutex_unlock(&hEvent->mutex);
+	return true;
+}
+unsigned int WaitForSingleObject(EVENT_HANDLE hHandle, unsigned int dwMilliseconds) {
+	pthread_mutex_lock(&hHandle->mutex);
+	unsigned int result = WAIT_OBJECT_0;
+	if (!hHandle->signaled) {
+		if (dwMilliseconds == INFINITE) {
+			while (!hHandle->signaled)
+				pthread_cond_wait(&hHandle->cond, &hHandle->mutex);
+		} else {
+			struct timespec ts;
+			clock_gettime(CLOCK_REALTIME, &ts);
+			ts.tv_sec += dwMilliseconds / 1000;
+			ts.tv_nsec += (dwMilliseconds % 1000) * 1000000L;
+			if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+			while (!hHandle->signaled) {
+				if (pthread_cond_timedwait(&hHandle->cond, &hHandle->mutex, &ts) != 0) {
+					result = WAIT_TIMEOUT;
+					break;
+				}
+			}
+		}
+	}
+	/* auto-reset semantics, matching how RefStreamEngine actually uses these */
+	if (result == WAIT_OBJECT_0) hHandle->signaled = false;
+	pthread_mutex_unlock(&hHandle->mutex);
+	return result;
+}
+unsigned int WaitForSingleObjectEx(EVENT_HANDLE hHandle, unsigned int dwMilliseconds, bool /*bAlertable*/) {
+	return WaitForSingleObject(hHandle, dwMilliseconds);
+}
+
+struct _CryThreadStart { unsigned int (*fn)(void *); void *arg; };
+static void *_CryThreadTrampoline(void *p) {
+	_CryThreadStart *s = (_CryThreadStart *)p;
+	unsigned int (*fn)(void *) = s->fn;
+	void *arg = s->arg;
+	delete s;
+	fn(arg);
+	return 0;
+}
+THREAD_HANDLE CreateThread(void *, size_t, unsigned int (*lpStartAddress)(void *),
+                           void *lpParameter, unsigned int, unsigned int *lpThreadId) {
+	pthread_t t;
+	_CryThreadStart *s = new _CryThreadStart{lpStartAddress, lpParameter};
+	pthread_create(&t, 0, _CryThreadTrampoline, s);
+	if (lpThreadId) *lpThreadId = (unsigned int)t;
+	return t;
+}
+unsigned int GetCurrentThreadId() { return (unsigned int)pthread_self(); }
+unsigned int SleepEx(unsigned int dwMilliseconds, bool) { usleep(dwMilliseconds * 1000); return 0; }
+
 bool SystemTimeToFileTime(const SYSTEMTIME *st, FILETIME *ft) {
 	struct tm tmv;
 	memset(&tmv, 0, sizeof(tmv));

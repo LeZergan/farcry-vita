@@ -32,3 +32,19 @@ struct SYSTEMTIME {
 	unsigned short wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, wMilliseconds;
 };
 bool SystemTimeToFileTime(const SYSTEMTIME *st, FILETIME *ft);
+
+/* ---- Real pthread-backed Win32 thread/event API for RefStreamEngine's
+   background streaming worker thread. ---- */
+#define INFINITE 0xFFFFFFFFu
+#define WAIT_OBJECT_0 0u
+#define WAIT_TIMEOUT 258u
+
+EVENT_HANDLE CreateEvent(void *lpEventAttributes, bool bManualReset, bool bInitialState, const char *lpName);
+bool SetEvent(EVENT_HANDLE hEvent);
+bool ResetEvent(EVENT_HANDLE hEvent);
+unsigned int WaitForSingleObject(EVENT_HANDLE hHandle, unsigned int dwMilliseconds);
+unsigned int WaitForSingleObjectEx(EVENT_HANDLE hHandle, unsigned int dwMilliseconds, bool bAlertable);
+THREAD_HANDLE CreateThread(void *lpThreadAttributes, size_t dwStackSize, unsigned int (*lpStartAddress)(void *),
+                           void *lpParameter, unsigned int dwCreationFlags, unsigned int *lpThreadId);
+unsigned int GetCurrentThreadId();
+unsigned int SleepEx(unsigned int dwMilliseconds, bool bAlertable);
