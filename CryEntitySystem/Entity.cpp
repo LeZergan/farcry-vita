@@ -1674,7 +1674,14 @@ void CEntity::UpdatePhysics( SEntityUpdateContext &ctx )
 					pLB->InvalidateVideoBuffer();
 				}
 			}
-			if ((m_bVisible^m_bWasVisible) && (!m_bVisible || psb.wind*psb.airResistance>0))
+			/* Vec3 has an implicit operator F*() (raw pointer to its own data);
+			   "psb.wind*psb.airResistance>0" was comparing that pointer's
+			   non-nullness against 0, not any actual value -- always true for
+			   a live object. A pre-existing bug under the original compiler,
+			   which allowed the implicit pointer comparison; strict C++
+			   rejects it outright. Preserving the original (buggy) compiled
+			   behavior exactly rather than guessing at the unknown intent. */
+			if ((m_bVisible^m_bWasVisible) && (!m_bVisible || true))
 				m_physic->Action(&aa);
 		}
 

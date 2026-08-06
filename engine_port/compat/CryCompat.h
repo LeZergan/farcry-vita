@@ -174,6 +174,16 @@ inline char *ltoa(long value, char *buf, int base) {
 	return buf;
 }
 
+inline void _splitpath(const char *inpath, char *drv, char *dir, char *fname, char *ext) {
+	if (drv) drv[0] = 0;
+	const char *slash = strrchr(inpath, '/');
+	const char *base = slash ? slash + 1 : inpath;
+	if (dir) { size_t n = base - inpath; memcpy(dir, inpath, n); dir[n] = 0; }
+	const char *dot = strrchr(base, '.');
+	if (fname) { size_t n = dot ? (size_t)(dot - base) : strlen(base); memcpy(fname, base, n); fname[n] = 0; }
+	if (ext) strcpy(ext, dot ? dot : "");
+}
+
 inline void _makepath(char *path, const char *drive, const char *dir, const char *filename, const char *ext) {
 	path[0] = 0;
 	if (drive && drive[0]) { strcat(path, drive); }

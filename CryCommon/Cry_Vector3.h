@@ -25,6 +25,9 @@
    old permissive MSVC single-pass lookup let this slide, modern GCC/Clang
    two-phase template lookup does not. */
 ILINE f32 Snap_s180( f32 val );
+ILINE f32 Snap_s360( f32 val );
+inline int isneg(double x);
+inline int isneg(int x);
 
 enum type_zero { zero };
 enum type_min { MIN };
