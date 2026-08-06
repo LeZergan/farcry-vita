@@ -228,15 +228,19 @@ static int64 GetTicks()
 {
 #if defined(WIN64)
 	return __rdtsc ();
-#else
-	typedef union _LARGE_INTEGER 
+#elif defined(__i386__) || defined(__x86_64__)
+	/* real x86 rdtsc, only valid on that architecture -- the previous
+	   version of this function ran this unconditionally under any LINUX
+	   build regardless of CPU, which is a genuine bug: rdtsc doesn't
+	   exist on ARM, and "=a"/"=d" are x86 register names. */
+	typedef union _LARGE_INTEGER
 	{
-    struct 
+    struct
 		{
         DWORD LowPart;
         LONG HighPart;
     };
-    struct 
+    struct
 		{
         DWORD LowPart;
         LONG HighPart;
@@ -247,6 +251,13 @@ static int64 GetTicks()
 	LARGE_INTEGER counter;
 	__asm__ __volatile__ ( "rdtsc" : "=a" (counter.u.LowPart), "=d" (counter.u.HighPart) );
 	return counter.QuadPart;
+#else
+	/* Portable fallback (ARM/Vita and anything else): a monotonic clock
+	   is just as valid here as a raw cycle counter -- every caller only
+	   uses GetTicks() for relative timing, never absolute cycle counts. */
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (int64)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 #endif
 }
 #endif

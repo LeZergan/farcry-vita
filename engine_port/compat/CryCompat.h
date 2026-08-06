@@ -132,6 +132,12 @@ inline char *strupr(char *s) { for (char *p = s; *p; ++p) *p = toupper((unsigned
 #define FILE_END                         2u
 #define ERROR_NO_SYSTEM_RESOURCES        1450L
 
+/* Normally comes from the Windows .rc-generated resource.h; just a build
+   version placeholder, not load-bearing for engine behavior. */
+#ifndef VERSION_INFO
+#define VERSION_INFO 1
+#endif
+
 /* Win32 32x32->64 multiply intrinsic */
 #define Int32x32To64(a, b) ((int64_t)(int32_t)(a) * (int64_t)(int32_t)(b))
 
