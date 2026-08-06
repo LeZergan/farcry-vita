@@ -14,6 +14,8 @@
 
 struct CryEngineDecalInfo;
 struct CryParticleSpawnInfo;
+class CryModelState; /* used only as a pointer member below; never
+                         declared anywhere in this file's include chain */
 
 #include <ICryAnimation.h>
 #include "CryModel.h"

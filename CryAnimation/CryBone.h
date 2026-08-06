@@ -12,6 +12,11 @@
 #ifndef _BONE_H
 #define _BONE_H
 
+class CryModelState; /* used only as a pointer parameter/member below;
+                         never declared anywhere in this file's own
+                         include chain (a real gap in the original source,
+                         not something specific to the LINUX build) */
+
 #include "CryHeaders.h"
 #include "Controller.h"
 #include "AnimationLayerInfo.h"
@@ -20,7 +25,7 @@
 class CryModel; 
 
 //////////////////////////////////////////////////////////////////////////
-// The bone class contains bone matrices and pointers to it parent and child’s.
+// The bone class contains bone matrices and pointers to it parent and childï¿½s.
 // Also every bone has pointer to array of controllers for this bone.
 // Bone uses controller to get position and orientation of bone for current animation frame.
 class CryBone : public ICryBone
