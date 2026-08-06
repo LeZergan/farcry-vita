@@ -138,6 +138,31 @@ inline char *strupr(char *s) { for (char *p = s; *p; ++p) *p = toupper((unsigned
 #define VERSION_INFO 1
 #endif
 
+inline unsigned int GetUserName(char *lpBuffer, unsigned int *nSize) {
+	const char *name = getenv("USER");
+	if (!name) name = "vita";
+	size_t len = strlen(name) + 1;
+	if (*nSize < len) { *nSize = (unsigned int)len; return 0; }
+	memcpy(lpBuffer, name, len);
+	*nSize = (unsigned int)len;
+	return 1;
+}
+
+struct MEMORYSTATUS {
+	unsigned int dwLength, dwMemoryLoad;
+	size_t dwTotalPhys, dwAvailPhys, dwTotalPageFile, dwAvailPageFile, dwTotalVirtual, dwAvailVirtual;
+};
+inline void GlobalMemoryStatus(MEMORYSTATUS *lpmem) {
+	/* Real Vita RAM figures (sceKernelGetFreeMemorySize) belong here once
+	   this actually runs on-device; 512MB total/256MB free is a
+	   placeholder in the right ballpark for compile-time testing. */
+	lpmem->dwLength = sizeof(MEMORYSTATUS);
+	lpmem->dwMemoryLoad = 50;
+	lpmem->dwTotalPhys = lpmem->dwTotalVirtual = 512u * 1024 * 1024;
+	lpmem->dwAvailPhys = lpmem->dwAvailVirtual = 256u * 1024 * 1024;
+	lpmem->dwTotalPageFile = lpmem->dwAvailPageFile = 0;
+}
+
 /* Win32 32x32->64 multiply intrinsic */
 #define Int32x32To64(a, b) ((int64_t)(int32_t)(a) * (int64_t)(int32_t)(b))
 
