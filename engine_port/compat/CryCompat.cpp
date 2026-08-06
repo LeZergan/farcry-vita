@@ -3,7 +3,8 @@
    has actually been processed via the normal include chain -- CryCompat.h
    itself is force-included ahead of that, so can only declare these). */
 #include "CryCompat.h"
-#include <platform.h> /* pulls in LinuxSpecific.h -> the real LARGE_INTEGER definition */
+#include <platform.h> /* pulls in LinuxSpecific.h -> the real LARGE_INTEGER/HANDLE/FILETIME definitions */
+#include "CryCompatIO.h"
 #include <time.h>
 
 bool QueryPerformanceCounter(LARGE_INTEGER *out) {
@@ -92,4 +93,20 @@ int GetOverlappedResult(HANDLE /*hFile*/, void *lpOverlapped, unsigned int *lpNu
 	OVERLAPPED *ov = (OVERLAPPED *)lpOverlapped;
 	if (lpNumberOfBytesTransferred) *lpNumberOfBytesTransferred = ov->dwNumberOfBytesTransfered;
 	return 1; /* TRUE: the (synchronous, already-complete) read succeeded */
+}
+
+bool SystemTimeToFileTime(const SYSTEMTIME *st, FILETIME *ft) {
+	struct tm tmv;
+	memset(&tmv, 0, sizeof(tmv));
+	tmv.tm_year = st->wYear - 1900;
+	tmv.tm_mon  = st->wMonth - 1;
+	tmv.tm_mday = st->wDay;
+	tmv.tm_hour = st->wHour;
+	tmv.tm_min  = st->wMinute;
+	tmv.tm_sec  = st->wSecond;
+	time_t t = mktime(&tmv);
+	long long ll = (long long)t * 10000000LL + 116444736000000000LL;
+	ft->dwLowDateTime  = (unsigned int)(ll & 0xFFFFFFFFu);
+	ft->dwHighDateTime = (unsigned int)(ll >> 32);
+	return true;
 }

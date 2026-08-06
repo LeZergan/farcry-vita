@@ -25,3 +25,10 @@ bool ReadFileEx(HANDLE hFile, void *lpBuffer, unsigned int nNumberOfBytesToRead,
 unsigned int SetFilePointer(HANDLE hFile, long lDistanceToMove, long *lpDistanceToMoveHigh,
                              unsigned int dwMoveMethod);
 int GetOverlappedResult(HANDLE hFile, void *lpOverlapped, unsigned int *lpNumberOfBytesTransferred, bool bWait);
+
+/* ZipDirStructures.cpp: converts a DOS-encoded zip entry timestamp to a
+   FILETIME via this Win32-style intermediate struct. */
+struct SYSTEMTIME {
+	unsigned short wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, wMilliseconds;
+};
+bool SystemTimeToFileTime(const SYSTEMTIME *st, FILETIME *ft);

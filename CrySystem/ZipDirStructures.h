@@ -6,6 +6,8 @@
 
 #if defined(LINUX)
 	#include <ctype.h>
+	#include "CryCompatIO.h" /* SYSTEMTIME/SystemTimeToFileTime -- FILETIME is
+	                             already complete by this point in the chain */
 #endif
 
 namespace ZipDir
