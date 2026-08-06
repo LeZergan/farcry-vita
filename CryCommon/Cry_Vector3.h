@@ -19,7 +19,12 @@
 
 #include "platform.h"
 #include <math.h>
-#include "Cry_Matrix.h" 
+#include "Cry_Matrix.h"
+
+/* Forward decl: defined later in this file but used above its definition --
+   old permissive MSVC single-pass lookup let this slide, modern GCC/Clang
+   two-phase template lookup does not. */
+ILINE f32 Snap_s180( f32 val );
 
 enum type_zero { zero };
 enum type_min { MIN };
@@ -329,10 +334,10 @@ typedef Vec3_f64 vectorr;
 typedef Vec3_tpl<int>		vectori;
 
 
-inline Vec3_tpl<f32>::Vec3_tpl(type_min) { x=y=z=-3.3E38f; }
-inline Vec3_tpl<f32>::Vec3_tpl(type_max) { x=y=z=3.3E38f; }
-inline Vec3_tpl<f64>::Vec3_tpl(type_min) { x=y=z=-1.7E308; }
-inline Vec3_tpl<f64>::Vec3_tpl(type_max) { x=y=z=1.7E308; }
+template<> inline Vec3_tpl<f32>::Vec3_tpl(type_min) { x=y=z=-3.3E38f; }
+template<> inline Vec3_tpl<f32>::Vec3_tpl(type_max) { x=y=z=3.3E38f; }
+template<> inline Vec3_tpl<f64>::Vec3_tpl(type_min) { x=y=z=-1.7E308; }
+template<> inline Vec3_tpl<f64>::Vec3_tpl(type_max) { x=y=z=1.7E308; }
 
 template<class F> 
 ILINE F GetLengthSquared( const Vec3_tpl<F> &v ) { return v.x*v.x + v.y*v.y + v.z*v.z; }
@@ -771,6 +776,14 @@ struct Plane
 	}
 
 };
+
+/* GetPlane is a friend of Plane but takes Vec3 arguments -- old permissive
+   MSVC found it via unqualified lookup regardless; standard-conformant ADL
+   only searches the argument types' associated classes/namespaces (Vec3),
+   never finds a friend hidden inside an unrelated class (Plane). Real
+   namespace-scope declarations fix this for every conformant compiler. */
+Plane GetPlane( const Vec3 &normal, const Vec3 &point );
+Plane GetPlane( const Vec3 &v0, const Vec3 &v1, const Vec3 &v2 );
 
 
 

@@ -276,7 +276,7 @@ const char* CCryPak::AdjustFileName(const char *src, char *dst, unsigned nFlags,
 	unsigned nLength = pEnd - dst;
 
 	if (bFoundInPak)
-		bFoundInPak=false;
+		*bFoundInPak=false;
 
 	if (nFlags & FLAGS_PATH_REAL)
 		return dst;

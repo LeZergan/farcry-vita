@@ -1,0 +1,12 @@
+# Third-party emulator binary distribution (95MB+, not our work)
+/vita3k/
+
+# The user's own game install media -- large, copyrighted retail content,
+# never belongs in version control
+/farcry data/
+
+# Build artifacts -- regenerable from CMakeLists.txt
+/vita_bringup/build_ninja/
+/vita_bringup/*.vpk
+/vita_bringup/*.self
+*.o

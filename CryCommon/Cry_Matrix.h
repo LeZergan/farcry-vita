@@ -1931,6 +1931,15 @@ template<class F,int SI,int SJ> struct Matrix44_tpl {
 
 };
 
+/* Same hidden-friend/two-phase-lookup issue as GetPlane above: old
+   permissive MSVC found this via unqualified lookup, standard-conformant
+   compilers need a real namespace-scope declaration. Declared concrete
+   (not as a function template) to match the original per-instantiation
+   friend semantics: callers rely on implicit Matrix33->Matrix44 conversion
+   via ordinary overload resolution, which template argument deduction
+   does not perform. */
+Matrix44_tpl<f32,4,1> GetTransposed44( const Matrix44_tpl<f32,4,1>& m );
+
 
 //----------------------------------------------------------------------------------
 //----------------------------------------------------------------------------------

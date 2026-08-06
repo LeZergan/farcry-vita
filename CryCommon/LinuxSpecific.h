@@ -19,7 +19,7 @@
 #include <math.h>
 #include <string.h>
 #include <errno.h>
-#include </usr/include/ctype.h>
+#include <ctype.h>
 
 typedef unsigned int				DWORD;
 typedef unsigned int*				LPDWORD;
@@ -27,7 +27,11 @@ typedef void*								LPVOID;
 #define VOID            		void
 #define PVOID								void*
 
-#define PHYSICS_EXPORTS
+/* Real fix: this used to be unconditionally #define'd here, which silently
+   suppresses the VALIDATOR_* macros (Cry_Math.h) for the ENTIRE Linux
+   build, not just the physics module -- on Windows PHYSICS_EXPORTS is only
+   defined by the CryPhysics.dll project itself. Matching that: don't
+   define it globally for every Linux/Vita translation unit. */
 
 #ifdef __cplusplus
 // checks if the heap is valid in debug; in release, this function shouldn't be called

@@ -376,13 +376,13 @@ public:
 
 private: // -----------------------------------------------------------------------
 
-	unsigned int __htonl(unsigned int n){
+	unsigned int CryHtoNl(unsigned int n){
 		return (unsigned int)(((n&0xFF000000)>>24)  |
 												((n&0x00FF0000)>>8)  |
 												((n&0x0000FF00)<<8)  |
 												((n&0x000000FF)<<24));
 	}
-	unsigned int __ntohl(unsigned int n){
+	unsigned int CryNtoHl(unsigned int n){
 		return (unsigned int)(((n&0xFF000000)>>24)  |
 												((n&0x00FF0000)>>8)  |
 												((n&0x0000FF00)<<8)  |
@@ -577,7 +577,7 @@ inline bool CStream::WriteNumberInBits(unsigned int n,size_t nSize)
 		return false;
 	}
 	n=n<<(32-nSize);
-	nSwapped=__htonl(n);
+	nSwapped=CryHtoNl(n);
 	return WriteBits((BYTE *)&nSwapped,nSize);
 }
 
@@ -592,7 +592,7 @@ inline bool CStream::ReadNumberInBits(unsigned int &n,size_t nSize)
 		return false;
 	}
 	if(!ReadBits((BYTE *)&nSwapped,nSize))return false;
-	n=__ntohl(nSwapped);
+	n=CryNtoHl(nSwapped);
 	n=n>>(32-nSize);
 	return true;
 }
@@ -608,7 +608,7 @@ inline bool CStream::WriteNumberInBits(int n,size_t nSize)
 		return false;
 	}
 	n=n<<(32-nSize);
-	nSwapped=__htonl((unsigned int)n);
+	nSwapped=CryHtoNl((unsigned int)n);
 	return WriteBits((BYTE *)&nSwapped,nSize);
 }
 
@@ -623,7 +623,7 @@ inline bool CStream::ReadNumberInBits(int &n,size_t nSize)
 		return false;
 	}
 	if(!ReadBits((BYTE *)&nSwapped,(nSize)))return false;
-	n=__ntohl((unsigned int)nSwapped);
+	n=CryNtoHl((unsigned int)nSwapped);
 	n=(n>>(32-nSize))&(0xFFFFFFFF>>(32-nSize));
 	
 	return true;
