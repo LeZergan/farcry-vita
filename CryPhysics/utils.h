@@ -307,7 +307,25 @@ extern float g_costab[SINCOSTABSZ],g_sintab[SINCOSTABSZ];
 #endif
 
 #if defined LINUX
+	/* Real fix, not a stub: the LINUX branch here only ever included
+	   validator.h and left ENTITY_VALIDATE/ENTITY_VALIDATE_ERRCODE
+	   completely undefined (only the WIN32 branch below defines them) --
+	   an unfinished-port bug, same pattern found elsewhere in this
+	   codebase (see engine_port/compat/README.md). Applying Crytek's own
+	   documented intent from the comment above ("uncomment ... to
+	   effectively disable validations") as the actual no-op definitions,
+	   rather than reimplementing the full Windows validation logic. */
 	#include "validator.h"
+	#define VALIDATOR_LOG(pLog,str)
+	#define VALIDATORS_START
+	#define VALIDATOR(member)
+	#define VALIDATOR_NORM(member)
+	#define VALIDATOR_NORM_MSG(member,msg,member1)
+	#define VALIDATOR_RANGE(member,minval,maxval)
+	#define VALIDATOR_RANGE2(member,minval,maxval)
+	#define VALIDATORS_END
+	#define ENTITY_VALIDATE(strSource,pStructure)
+	#define ENTITY_VALIDATE_ERRCODE(strSource,pStructure,iErrCode)
 #else
 	#define VALIDATOR_LOG(pLog,str) pLog->Log(str) //OutputDebugString(str)
 	#define VALIDATORS_START bool validate( const char *strSource, ILog *pLog, const vectorf &pt,\

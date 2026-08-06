@@ -13,11 +13,13 @@
 #include <fnmatch.h>
 #include <strings.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <ctime>
 #include <string>
+#include <algorithm> /* DefenceWall.cpp uses std::replace without including this itself */
 #include <stdint.h>
 
 /* ---- Critical section, backed by a recursive pthread mutex ---- */
@@ -106,6 +108,8 @@ inline unsigned int GetTickCount() {
 	return (unsigned int)((unsigned long long)ts.tv_sec * 1000ULL + ts.tv_nsec / 1000000ULL);
 }
 inline unsigned int GetLastError() { return errno; }
+inline int WSAGetLastError() { return errno; }
+inline int closesocket(int s) { return close(s); }
 inline void SetLastError(unsigned int e) { errno = e; }
 inline int memicmp(const char *a, const char *b, size_t len) { return strncasecmp(a, b, len); }
 inline char *strlwr(char *s) { for (char *p = s; *p; ++p) *p = tolower((unsigned char)*p); return s; }

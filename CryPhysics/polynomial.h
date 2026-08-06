@@ -80,7 +80,7 @@ struct tagPolyE
 	inline static ftype polye() {return (ftype)1E-10;}
 };
 
-inline float tagPolyE<float>::polye() {return 1e-6f;}
+template<> inline float tagPolyE<float>::polye() {return 1e-6f;}
 
 template <class ftype> inline ftype polye() { return tagPolyE<ftype>::polye(); }
 
