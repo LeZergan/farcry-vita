@@ -126,6 +126,47 @@ inline char *_strlwr(char *s) { return strlwr(s); }
 #define RemoveCRLF(...) ((void)0)
 inline bool compareTextFileStrings(const char *a, const char *b) { return strcmp(a, b) == 0; }
 
+/* vitasdk's newlib declares fnmatch() (fnmatch.h) but doesn't actually
+   implement it in libc.a -- a real, minimal implementation of the
+   standard POSIX glob-matching algorithm (*, ?, [..] classes), enough
+   for the simple filename patterns CryPak's directory scanning uses. */
+inline int fnmatch(const char *pattern, const char *str, int) {
+	while (*pattern) {
+		if (*pattern == '*') {
+			while (*pattern == '*') pattern++;
+			if (!*pattern) return 0;
+			for (const char *s = str; *s; s++)
+				if (fnmatch(pattern, s, 0) == 0) return 0;
+			return 1;
+		} else if (*pattern == '?') {
+			if (!*str) return 1;
+			pattern++; str++;
+		} else if (*pattern == '[') {
+			if (!*str) return 1;
+			const char *p = pattern + 1;
+			bool neg = (*p == '!' || *p == '^');
+			if (neg) p++;
+			bool matched = false;
+			while (*p && *p != ']') {
+				if (p[1] == '-' && p[2] && p[2] != ']') {
+					if ((unsigned char)*str >= (unsigned char)p[0] && (unsigned char)*str <= (unsigned char)p[2]) matched = true;
+					p += 3;
+				} else {
+					if (*p == *str) matched = true;
+					p++;
+				}
+			}
+			if (*p == ']') p++;
+			if (matched == neg) return 1;
+			pattern = p; str++;
+		} else {
+			if (tolower((unsigned char)*pattern) != tolower((unsigned char)*str)) return 1;
+			pattern++; str++;
+		}
+	}
+	return *str ? 1 : 0;
+}
+
 /* Overlapped-file-I/O emulation constants (safe to declare here -- no
    HANDLE/class-template dependency). The function DECLARATIONS that need
    the real HANDLE type live in CryCompatIO.h instead: this header
