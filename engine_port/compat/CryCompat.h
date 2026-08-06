@@ -152,6 +152,9 @@ struct MEMORYSTATUS {
 	unsigned int dwLength, dwMemoryLoad;
 	size_t dwTotalPhys, dwAvailPhys, dwTotalPageFile, dwAvailPageFile, dwTotalVirtual, dwAvailVirtual;
 };
+inline bool DeleteFile(const char *lpFileName) { return remove(lpFileName) == 0; }
+inline bool RemoveDirectory(const char *lpPathName) { return rmdir(lpPathName) == 0; }
+
 inline void GlobalMemoryStatus(MEMORYSTATUS *lpmem) {
 	/* Real Vita RAM figures (sceKernelGetFreeMemorySize) belong here once
 	   this actually runs on-device; 512MB total/256MB free is a

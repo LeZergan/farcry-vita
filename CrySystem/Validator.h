@@ -10,8 +10,8 @@
 //
 //////////////////////////////////////////////////////////////////////
 
-//#ifndef VALIDATOR_H
-//#define VALIDATOR_H
+#ifndef VALIDATOR_H
+#define VALIDATOR_H
 
 #if _MSC_VER > 1000
 # pragma once
@@ -37,4 +37,4 @@ struct SDefaultValidator : public IValidator
 	virtual void Report( SValidatorRecord &record );
 };
 
-//#endif
+#endif // VALIDATOR_H
