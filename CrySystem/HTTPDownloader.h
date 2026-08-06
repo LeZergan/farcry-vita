@@ -4,6 +4,16 @@
 #if !defined(LINUX)
 	#include <wininet.h>
 	#include <dbghelp.h>
+#else
+	/* Opaque handle type only, matching the existing pattern for other
+	   Win32 handles on this platform (see LinuxSpecific.h's HANDLE).
+	   Download()'s actual WinINet-based implementation only compiles
+	   under WIN32 to begin with (see HTTPDownloader.cpp, excluded from
+	   this build -- see engine_port/compat/README.md); this only needs
+	   to exist so the class itself, and the InitializeTemplate/
+	   ReleaseTemplate methods ScriptBinding.cpp's real script-registration
+	   code calls, compile and link. */
+	typedef void *HINTERNET;
 #endif
 #include <IScriptSystem.h>
 #include <_ScriptableEx.h>
