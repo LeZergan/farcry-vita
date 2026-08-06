@@ -922,7 +922,12 @@ void CSound::SetPitch(int nValue)
 //////////////////////////////////////////////////////////////////////
 void CSound::SetLoopPoints(const int iLoopStart, const int iLoopEnd)
 {
-	CHECK_LOADED(SetLoopPoints);
+	CHECK_LOADED(SetLoopPoints, ); /* was missing the 2nd (return value) arg
+		the macro requires -- a longstanding bug Crytek's own code
+		acknowledged and suppressed via #pragma warning(disable:4003)
+		rather than fixed; MSVC treated it as a non-fatal warning, GCC
+		treats a macro arity mismatch as a hard error. Fixed to match
+		SetLoopPoints' void return type. */
 	if (m_pSound->GetSample())
 	{
 		GUARD_HEAP;

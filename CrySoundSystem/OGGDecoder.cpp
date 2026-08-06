@@ -24,13 +24,19 @@ void getTicks(int64* pnTime)
 {
 #ifdef WIN64
 	*pnTime = __rdtsc();
+#elif defined(__i386__) && !defined(__x86_64__)
+	/* MSVC MASM-syntax inline asm, only valid (and only assembled by
+	   MSVC's own inline-asm dialect) on 32-bit x86 -- same class of bug
+	   as platform.h's GetTicks(): unconditionally compiled under any
+	   non-WIN64 build regardless of actual target architecture or
+	   compiler. GCC doesn't even parse MASM block syntax at all. */
+	__asm__ __volatile__ ("rdtsc" : "=a" (*(uint32_t*)pnTime), "=d" (*((uint32_t*)pnTime + 1)));
 #else
-	__asm {
-		mov ebx, pnTime
-		rdtsc
-		mov [ebx], eax
-		mov [ebx+4], edx
-	}
+	/* Portable fallback (ARM/Vita and anything else): same reasoning as
+	   platform.h's GetTicks() -- only ever used as a relative time source. */
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	*pnTime = (int64)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 #endif
 }
 

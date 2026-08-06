@@ -20,6 +20,8 @@
 #include <ctime>
 #include <string>
 #include <algorithm> /* DefenceWall.cpp uses std::replace without including this itself */
+#include <unordered_map>
+namespace std { template<class K, class V> using hash_map = unordered_map<K, V>; }
 #include <stdint.h>
 
 /* ---- Critical section, backed by a recursive pthread mutex ---- */
@@ -114,6 +116,13 @@ inline void SetLastError(unsigned int e) { errno = e; }
 inline int memicmp(const char *a, const char *b, size_t len) { return strncasecmp(a, b, len); }
 inline char *strlwr(char *s) { for (char *p = s; *p; ++p) *p = tolower((unsigned char)*p); return s; }
 inline char *strupr(char *s) { for (char *p = s; *p; ++p) *p = toupper((unsigned char)*p); return s; }
+inline char *_strlwr(char *s) { return strlwr(s); }
+#define DebugBreak() ((void)0)
+#define __noop(...) ((void)0)
+/* No DLL export/import concept on a statically-linked Vita build --
+   LinuxSpecific.h already no-ops __cdecl/__stdcall/etc. the same way,
+   this one just isn't among them. */
+#define __declspec(x)
 
 /* Overlapped-file-I/O emulation constants (safe to declare here -- no
    HANDLE/class-template dependency). The function DECLARATIONS that need
@@ -138,6 +147,17 @@ inline char *strupr(char *s) { for (char *p = s; *p; ++p) *p = toupper((unsigned
 
 /* Normally comes from the Windows .rc-generated resource.h; just a build
    version placeholder, not load-bearing for engine behavior. */
+#pragma pack(push, 1)
+struct BITMAPFILEHEADER {
+	uint16_t bfType; uint32_t bfSize; uint16_t bfReserved1, bfReserved2; uint32_t bfOffBits;
+};
+struct BITMAPINFOHEADER {
+	uint32_t biSize; int32_t biWidth, biHeight; uint16_t biPlanes, biBitCount;
+	uint32_t biCompression, biSizeImage; int32_t biXPelsPerMeter, biYPelsPerMeter;
+	uint32_t biClrUsed, biClrImportant;
+};
+#pragma pack(pop)
+
 #ifndef VERSION_INFO
 #define VERSION_INFO 1
 #endif

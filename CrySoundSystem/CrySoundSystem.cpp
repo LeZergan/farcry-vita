@@ -79,11 +79,13 @@ extern "C" ISoundSystem* CreateSoundSystem(struct ISystem* pISystem, void* pInit
 
 #ifndef __MWERKS__
 #ifndef _XBOX
+#ifndef LINUX /* no DLL-entry-point concept on a statically-linked Vita build */
 ///////////////////////////////////////////////
 BOOL APIENTRY DllMain(HANDLE hModule, DWORD  ul_reason_for_call,  LPVOID lpReserved)
 {
     return TRUE;
 }
+#endif //LINUX
 #endif //_XBOX
 #endif
 
