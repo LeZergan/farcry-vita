@@ -111,6 +111,27 @@ inline int memicmp(const char *a, const char *b, size_t len) { return strncasecm
 inline char *strlwr(char *s) { for (char *p = s; *p; ++p) *p = tolower((unsigned char)*p); return s; }
 inline char *strupr(char *s) { for (char *p = s; *p; ++p) *p = toupper((unsigned char)*p); return s; }
 
+/* Overlapped-file-I/O emulation constants (safe to declare here -- no
+   HANDLE/class-template dependency). The function DECLARATIONS that need
+   the real HANDLE type live in CryCompatIO.h instead: this header
+   (CryCompat.h) is force-included (-include) ahead of EVERYTHING in the
+   translation unit, including stdafx.h itself, so HANDLE (a full
+   CHandle<int,-1> class template instantiation from LinuxSpecific.h)
+   isn't available yet at this point -- unlike LARGE_INTEGER above, a
+   class template instantiation can't just be forward-declared. See
+   CryCompatIO.h for why it's included from RefStreamEngine.h instead. */
+#define GENERIC_READ                     0x80000000u
+#define GENERIC_WRITE                    0x40000000u
+#define FILE_SHARE_READ                  0x00000001u
+#define FILE_SHARE_WRITE                 0x00000002u
+#define OPEN_EXISTING                    3u
+#define FILE_FLAG_OVERLAPPED             0x40000000u
+#define INVALID_FILE_SIZE                ((unsigned int)-1)
+#define FILE_BEGIN                       0u
+#define FILE_CURRENT                     1u
+#define FILE_END                         2u
+#define ERROR_NO_SYSTEM_RESOURCES        1450L
+
 /* Win32 32x32->64 multiply intrinsic */
 #define Int32x32To64(a, b) ((int64_t)(int32_t)(a) * (int64_t)(int32_t)(b))
 

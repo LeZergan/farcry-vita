@@ -4,6 +4,8 @@
 #ifndef _CRY_SYSTEM_REFERENCE_STREAM_ENGINE_HDR_
 #define _CRY_SYSTEM_REFERENCE_STREAM_ENGINE_HDR_
 #include "IMiniLog.h"
+#include "CryCompatIO.h" /* HANDLE is complete by this point in the include
+                             chain -- see its own header comment */
 #include "IStreamEngine.h"
 #include "RefReadStream.h"
 #include "RefReadStreamProxy.h"
