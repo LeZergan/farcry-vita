@@ -188,8 +188,70 @@ void CVitaRenderer::SetTexture(int tnum, ETexType Type) { }
 void CVitaRenderer::SetWhiteTexture() { }
 void CVitaRenderer::WriteXY(CXFont * currfont, int x, int y, float xscale, float yscale, float r, float g, float b, float a, const char * message, ...) { }
 void CVitaRenderer::Draw2dText(float posX, float posY, const char * szText, SDrawTextInfo & info) { }
-void CVitaRenderer::Draw2dImage(float xpos, float ypos, float w, float h, int texture_id, float s0, float t0, float s1, float t1, float angle, float r, float g, float b, float a, float z) { }
-void CVitaRenderer::DrawImage(float xpos, float ypos, float w, float h, int texture_id, float s0, float t0, float s1, float t1, float r, float g, float b, float a) { }
+void CVitaRenderer::Draw2dImage(float xpos, float ypos, float w, float h, int texture_id, float s0, float t0, float s1, float t1, float angle, float r, float g, float b, float a, float z)
+{
+#if defined(LINUX)
+	/* Vita: real basic-shape/2D-image primitive -- solid-colored filled
+	   rectangle when texture_id<=0 (no real ITexPic pipeline exists yet,
+	   see EF_LoadTexture's stub), or a textured quad otherwise (e.g. the
+	   font atlas, or any texture id obtained via FontCreateTexture).
+	   angle is ignored (axis-aligned only) -- not needed for menu boxes. */
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+	glOrthof(0.0f, (float)m_nWidth, (float)m_nHeight, 0.0f, -1.0f, 1.0f);
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	bool bTextured = texture_id > 0;
+	if (bTextured)
+	{
+		glEnable(GL_TEXTURE_2D);
+		glBindTexture(GL_TEXTURE_2D, (GLuint)texture_id);
+		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	}
+	else
+	{
+		glDisable(GL_TEXTURE_2D);
+	}
+
+	float x0 = xpos, y0 = ypos, x1 = xpos + w, y1 = ypos + h;
+	const float verts[8] = { x0,y0, x1,y0, x1,y1, x0,y1 };
+	const float uvs[8]   = { s0,t0, s1,t0, s1,t1, s0,t1 };
+	unsigned char ur = (unsigned char)(r*255.0f), ug = (unsigned char)(g*255.0f),
+		ub = (unsigned char)(b*255.0f), ua = (unsigned char)(a*255.0f);
+	const unsigned char cols[16] = {
+		ur,ug,ub,ua, ur,ug,ub,ua, ur,ug,ub,ua, ur,ug,ub,ua };
+
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glVertexPointer(2, GL_FLOAT, 0, verts);
+	glColorPointer(4, GL_UNSIGNED_BYTE, 0, cols);
+	if (bTextured)
+	{
+		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+		glTexCoordPointer(2, GL_FLOAT, 0, uvs);
+	}
+	glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+	glDisableClientState(GL_VERTEX_ARRAY);
+	glDisableClientState(GL_COLOR_ARRAY);
+	if (bTextured)
+		glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode(GL_MODELVIEW);
+	glPopMatrix();
+#endif
+}
+void CVitaRenderer::DrawImage(float xpos, float ypos, float w, float h, int texture_id, float s0, float t0, float s1, float t1, float r, float g, float b, float a)
+{
+	Draw2dImage(xpos, ypos, w, h, texture_id, s0, t0, s1, t1, 0.0f, r, g, b, a, 1.0f);
+}
 int CVitaRenderer::SetPolygonMode(int mode) { return 0; }
 void CVitaRenderer::GetMemoryUsage(ICrySizer* Sizer) { }
 void CVitaRenderer::ScreenShot(const char * filename) { }
