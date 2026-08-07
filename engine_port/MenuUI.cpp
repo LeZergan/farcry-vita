@@ -239,4 +239,59 @@ const char *GetMenuScreenItemLabel(const char *szScreenName, int nIndex)
 	return it->second[nIndex].label.c_str();
 }
 
+const char *GetMenuScreenItemTarget(const char *szScreenName, int nIndex)
+{
+	std::map<std::string, std::vector<SMenuUIItem> >::iterator it = g_ScreenItems.find(szScreenName);
+	if (it == g_ScreenItems.end() || nIndex < 0 || nIndex >= (int)it->second.size()) return "";
+	return it->second[nIndex].target.c_str();
+}
+
+const char *GetMenuScreenItemId(const char *szScreenName, int nIndex)
+{
+	std::map<std::string, std::vector<SMenuUIItem> >::iterator it = g_ScreenItems.find(szScreenName);
+	if (it == g_ScreenItems.end() || nIndex < 0 || nIndex >= (int)it->second.size()) return "";
+	return it->second[nIndex].id.c_str();
+}
+
+/* Vita: real navigation -- executes the real, unmodified
+   SCRIPTS/MenuScreens/<target>.lua for a small, known set of the real
+   MainScreen.lua targets (the same file names CryGame's real UI:GotoPage
+   would have loaded), so selecting e.g. "Campaign" or "Options" runs the
+   real script and captures whatever real side-menu items IT defines via
+   AddUISideMenu, instead of stopping at the top-level menu. Screens whose
+   real Lua doesn't call AddUISideMenu at all (e.g. Credits, which builds
+   a scrolling text widget our minimal UI stand-in doesn't capture) will
+   just show zero items after switching -- honestly reflecting what this
+   stand-in can and can't visualize, not a fabricated screen. */
+bool ExecuteMenuSubScreen(ISystem *pSystem, const char *szTarget)
+{
+	if (!pSystem || !szTarget) return false;
+	IScriptSystem *pSS = pSystem->GetIScriptSystem();
+	if (!pSS) return false;
+
+	static const char *s_arrKnownScreens[][2] = {
+		{ "Campaign",    "SCRIPTS/MenuScreens/Campaign.lua" },
+		{ "Multiplayer", "SCRIPTS/MenuScreens/Multiplayer.lua" },
+		{ "Options",     "SCRIPTS/MenuScreens/Options.lua" },
+		{ "Profiles",    "SCRIPTS/MenuScreens/Profiles.lua" },
+		{ "Mods",        "SCRIPTS/MenuScreens/Mods.Lua" },
+		{ "Credits",     "SCRIPTS/MenuScreens/Credits.lua" },
+		{ "DemoLoop",    "SCRIPTS/MenuScreens/DemoLoop.lua" },
+	};
+	for (size_t i = 0; i < sizeof(s_arrKnownScreens)/sizeof(s_arrKnownScreens[0]); i++)
+	{
+		if (strcmp(szTarget, s_arrKnownScreens[i][0]) == 0)
+		{
+			if (g_ScreenItems.find(szTarget) != g_ScreenItems.end())
+				return true; // already executed once this run, real data already captured
+			sceClibPrintf("[BOOTTRACE] ExecuteMenuSubScreen: executing real %s\n", s_arrKnownScreens[i][1]);
+			bool bOk = pSS->ExecuteFile(s_arrKnownScreens[i][1], true, true);
+			sceClibPrintf("[BOOTTRACE] ExecuteMenuSubScreen: %s ExecuteFile=%d, captured items=%d\n",
+				szTarget, (int)bOk, GetMenuScreenItemCount(szTarget));
+			return bOk;
+		}
+	}
+	return false;
+}
+
 #endif // defined(LINUX)

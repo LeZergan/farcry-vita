@@ -791,13 +791,32 @@ void CSystem::CreateRendererVars()
 	//m_rWidth = GetIConsole()->CreateVariable("r_Width", "800", VF_DUMPTODISK);
 	//m_rHeight = GetIConsole()->CreateVariable("r_Height", "600", VF_DUMPTODISK);
 	sceClibPrintf("[BOOTTRACE] CreateRendererVars: before r_Width\n");
+#if defined(LINUX)
+	/* Vita: the real PC defaults (1024x768) don't match the real Vita
+	   screen (960x544) -- CVitaRenderer::Init receives these values
+	   verbatim and sets glViewport/the font ortho projection from them
+	   (see VitaRenderer.cpp), so a mismatched default here is what was
+	   actually cropping/mispositioning on-screen content, not a rendering
+	   bug. Real native resolution for the real hardware this is running
+	   on. */
+	m_rWidth = GetIConsole()->CreateVariable("r_Width", "960", VF_DUMPTODISK,
+		"Sets the display width, in pixels. Default is 960 (Vita native).\n"
+		"Usage: r_Width [960]");
+#else
 	m_rWidth = GetIConsole()->CreateVariable("r_Width", "1024", VF_DUMPTODISK,
 		"Sets the display width, in pixels. Default is 1024.\n"
 		"Usage: r_Width [800/1024]");
+#endif
 	sceClibPrintf("[BOOTTRACE] CreateRendererVars: before r_Height\n");
+#if defined(LINUX)
+	m_rHeight = GetIConsole()->CreateVariable("r_Height", "544", VF_DUMPTODISK,
+		"Sets the display height, in pixels. Default is 544 (Vita native).\n"
+		"Usage: r_Height [544]");
+#else
 	m_rHeight = GetIConsole()->CreateVariable("r_Height", "768", VF_DUMPTODISK,
 		"Sets the display height, in pixels. Default is 768.\n"
 		"Usage: r_Height [600/768]");
+#endif
 	sceClibPrintf("[BOOTTRACE] CreateRendererVars: before r_ColorBits\n");
 	m_rColorBits = GetIConsole()->CreateVariable("r_ColorBits", "32", VF_DUMPTODISK,
 		"Sets the color resolution, in bits per pixel. Default is 32.\n"
