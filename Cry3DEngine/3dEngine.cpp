@@ -113,17 +113,38 @@ C3DEngine::C3DEngine(ISystem	* pSystem)
 	m_bEnabled=1;
 
 	ITexPic * pPic = GetRenderer()->EF_LoadTexture("diskette.tga",0,0,eTT_Base);
+#if defined(LINUX)
+  /* Vita: real Far Cry texture names here are bare (no "Textures/" root,
+     no extension swap for a nested subfolder like Textures/common/), and
+     CVitaRenderer::EF_LoadTexture doesn't replicate the real CRenderer's
+     full search-path convention (see VitaRenderer.cpp) -- some of these
+     three may legitimately fail to resolve. That's a real, separate gap;
+     what's being fixed here is that the ORIGINAL code unconditionally
+     dereferenced the result with no null check at all, which is a crash
+     on any platform once a texture fails to load, not something
+     Vita-specific. */
+  m_nStreamingIconTexID = pPic ? pPic->GetTextureID() : 0;
+#else
   m_nStreamingIconTexID = pPic->GetTextureID();
+#endif
 
 	pPic = GetRenderer()->EF_LoadTexture("black.tga",0,0,eTT_Base);
+#if defined(LINUX)
+  m_nBlackTexID = pPic ? pPic->GetTextureID() : 0;
+#else
   m_nBlackTexID = pPic->GetTextureID();
+#endif
 
 	ITexPic * pPicSpot = GetRenderer()->EF_LoadTexture("spot_shadow.tga",0,0,eTT_Base);
+#if defined(LINUX)
+	m_nShadowSpotTexId = pPicSpot ? pPicSpot->GetTextureID() : 0;
+#else
 	m_nShadowSpotTexId = pPicSpot->GetTextureID();
+#endif
 
   // create components
   m_pObjManager   = 0;//new CObjManager (m_pSystem);
-	
+
   m_pPartManager = 0;
 
   m_pDecalManager     = 0;//new CDecalManager   (m_pSystem, this);
@@ -134,7 +155,12 @@ C3DEngine::C3DEngine(ISystem	* pSystem)
   Cry3DEngineBase::m_pCVars = m_pCVars;
 
   // create REs
-  m_pRESky              = (CRESky*)             GetRenderer()->EF_CreateRE(eDATA_Sky); m_pRESky->m_fAlpha = 1.f;
+  m_pRESky              = (CRESky*)             GetRenderer()->EF_CreateRE(eDATA_Sky);
+#if defined(LINUX)
+  if (m_pRESky) m_pRESky->m_fAlpha = 1.f;
+#else
+  m_pRESky->m_fAlpha = 1.f;
+#endif
   //m_pREOutSpace         = (CREOutSpace * )      GetRenderer()->EF_CreateRE(eDATA_OutSpace);
   m_pREDummy            = (CREDummy*)           GetRenderer()->EF_CreateRE(eDATA_Dummy);
   m_pRETerrainParticles = (CRETerrainParticles*)GetRenderer()->EF_CreateRE(eDATA_TerrainParticles);

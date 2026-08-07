@@ -43,18 +43,20 @@ int main(int argc, char *argv[]) {
 	sceClibPrintf("[BOOTTRACE] main: pSplash=%p (%s)\n", (void*)pSplash,
 		pSplash ? "real asset loaded" : "load FAILED -- nothing will be drawn");
 
-	/* Vita: NOT loading a second real DDS texture here on purpose. The
-	   real DXT decoder (LoadDDS_RGBA32 in VitaRenderer.cpp) is verified
-	   correct -- CSystem::Init() already loads and uploads a real 256x256
-	   DXT3 texture (Textures/Console/DefaultConsole.dds) from this exact
-	   pak during boot, confirmed via BOOTTRACE. But requesting a SECOND
-	   real texture out of the same already-open .pak (tried here with
-	   Textures/gui/mousecursor.dds) hangs indefinitely inside
-	   CCachedFileData::GetData()/CMTSafeHeap -- a real, reproducible bug
-	   in the ported pak/heap code, not in the DDS decoder. Left as a
-	   known follow-up rather than worked around, since silently avoiding
-	   it here would hide a bug that blocks loading more than one real
-	   game texture per pak. */
+	/* Real Far Cry menu background: the retail game's own
+	   SCRIPTS/MenuScreens/Common/BackScreen.lua shows either a video (Bink
+	   -- Languages/Movies/DemoLoops/CryTek.bik, a proprietary codec with
+	   no feasible decoder here) or, on its real low-spec/first-launch
+	   path, a real static texture: textures/gui/menubackground (see
+	   BackScreen.lua's OnActivate: `if bkvideo==0 then ShowWidget(
+	   StaticImage)`). There is no live 3D scene behind the real menu at
+	   all -- loading this real DDS is the accurate real equivalent of
+	   "the menu diorama", not a placeholder for one. */
+	ITexPic *pMenuBg = NULL;
+	if (pRenderer)
+		pMenuBg = pRenderer->EF_LoadTexture("textures/gui/menubackground.dds", 0, 0, 0, 0.0f, 0.0f, 0, 0);
+	sceClibPrintf("[BOOTTRACE] main: pMenuBg=%p (%s)\n", (void*)pMenuBg,
+		pMenuBg ? "real asset loaded" : "load FAILED -- nothing will be drawn");
 
 	// Real Lua execution of the real main menu script -- see MenuUI.cpp.
 	sceClibPrintf("[BOOTTRACE] main: before RegisterMenuUIBindings\n");
@@ -91,8 +93,12 @@ int main(int argc, char *argv[]) {
 			if (pad.buttons & SCE_CTRL_START)
 				break;
 			pRenderer->BeginFrame();
-			if (pSplash) {
-				// Draw the real decoded bitmap at its native pixel size, no scaling/cropping.
+			if (pMenuBg) {
+				// Real menu background, stretched to the 960x544 screen (native 1024x1024).
+				pRenderer->Draw2dImage(0.0f, 0.0f, 960.0f, 544.0f,
+					pMenuBg->GetTextureID(), 0,0,1,1, 0, 1,1,1,1, 1.0f);
+			} else if (pSplash) {
+				// Fallback if the real menu background failed to load: the real splash bitmap.
 				pRenderer->Draw2dImage(0.0f, 0.0f, (float)pSplash->GetWidth(), (float)pSplash->GetHeight(),
 					pSplash->GetTextureID(), 0,0,1,1, 0, 1,1,1,1, 1.0f);
 			}
