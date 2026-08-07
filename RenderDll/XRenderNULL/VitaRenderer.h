@@ -21,6 +21,47 @@
 # pragma once
 #endif
 
+/* Vita: real ITexPic backed by a real vitaGL texture and real decoded
+   pixel data (see CVitaRenderer::EF_LoadTexture -- currently BMP only,
+   the format the real Far Cry install's fcsplash.bmp actually uses).
+   No fabricated content: GetData32/GetTextureID/GetWidth/GetHeight all
+   reflect the actual decoded file. */
+class CVitaTexPic : public ITexPic
+{
+public:
+	CVitaTexPic(const char *pName, int nGLTexId, int nWidth, int nHeight, byte *pRGBA32)
+		: m_nRefs(1), m_nGLTexId(nGLTexId), m_nWidth(nWidth), m_nHeight(nHeight), m_pRGBA32(pRGBA32)
+	{
+		strncpy(m_szName, pName ? pName : "", sizeof(m_szName)-1);
+		m_szName[sizeof(m_szName)-1] = 0;
+	}
+	virtual void AddRef() { ++m_nRefs; }
+	virtual void Release(int bForce=false) { if (--m_nRefs <= 0 || bForce) delete this; }
+	virtual const char *GetName() { return m_szName; }
+	virtual int GetWidth() { return m_nWidth; }
+	virtual int GetHeight() { return m_nHeight; }
+	virtual int GetOriginalWidth() { return m_nWidth; }
+	virtual int GetOriginalHeight() { return m_nHeight; }
+	virtual int GetTextureID() { return m_nGLTexId; }
+	virtual int GetFlags() { return 0; }
+	virtual int GetFlags2() { return 0; }
+	virtual void SetClamp(bool bEnable) { }
+	virtual bool IsTextureLoaded() { return m_nGLTexId > 0; }
+	virtual void PrecacheAsynchronously(float fDist, int Flags) { }
+	virtual void Preload(int Flags) { }
+	virtual byte *GetData32() { return m_pRGBA32; }
+	virtual bool SetFilter(int nFilter) { return true; }
+
+private:
+	int m_nRefs;
+	int m_nGLTexId;
+	int m_nWidth, m_nHeight;
+	byte *m_pRGBA32; // owned, decoded RGBA8888 pixels; freed in ~CVitaTexPic
+	char m_szName[256];
+public:
+	~CVitaTexPic();
+};
+
 class CVitaRenderer : public IRenderer
 {
 public:

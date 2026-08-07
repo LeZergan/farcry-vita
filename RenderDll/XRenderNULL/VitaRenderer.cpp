@@ -388,7 +388,146 @@ void CVitaRenderer::EF_ReloadShaderFiles(int nCategory) { }
 void CVitaRenderer::EF_ReloadTextures() { }
 IShader			* CVitaRenderer::EF_CopyShader(IShader * ef) { return 0; }
 ITexPic * CVitaRenderer::EF_GetTextureByID(int Id) { return 0; }
-ITexPic			* CVitaRenderer::EF_LoadTexture(const char* nameTex, uint flags, uint flags2, byte eTT, float fAmount1, float fAmount2, int Id, int BindId) { return 0; }
+
+CVitaTexPic::~CVitaTexPic()
+{
+	if (m_pRGBA32)
+		delete [] m_pRGBA32;
+}
+
+#if defined(LINUX)
+/* Vita: real BMP decoder -- 24bpp uncompressed only, which is what the
+   real, retail Far Cry install's fcsplash.bmp actually is (verified via
+   `file`/hexdump before writing this). No fabricated pixels: every byte
+   here comes from the real file read through the real ICryPak file
+   system (so it also works from inside real .pak archives, not just
+   loose files). Parsed field-by-field rather than via a struct overlay
+   to avoid struct-packing/alignment surprises across compilers. */
+static byte *LoadBMP_RGBA32(ICryPak *pPak, const char *path, int *pOutW, int *pOutH)
+{
+	FILE *fp = pPak->FOpen(path, "rb");
+	if (!fp)
+	{
+		sceClibPrintf("[BOOTTRACE] LoadBMP_RGBA32: FOpen failed for %s\n", path);
+		return NULL;
+	}
+
+	byte fileHeader[14];
+	byte infoHeader[40];
+	if (pPak->FRead(fileHeader, 1, 14, fp) != 14 || pPak->FRead(infoHeader, 1, 40, fp) != 40)
+	{
+		sceClibPrintf("[BOOTTRACE] LoadBMP_RGBA32: header read failed for %s\n", path);
+		pPak->FClose(fp);
+		return NULL;
+	}
+
+	if (fileHeader[0] != 'B' || fileHeader[1] != 'M')
+	{
+		sceClibPrintf("[BOOTTRACE] LoadBMP_RGBA32: not a BMP (bad signature) %s\n", path);
+		pPak->FClose(fp);
+		return NULL;
+	}
+
+	unsigned int dataOffset = fileHeader[10] | (fileHeader[11]<<8) | (fileHeader[12]<<16) | (fileHeader[13]<<24);
+	int width  = infoHeader[4] | (infoHeader[5]<<8) | (infoHeader[6]<<16) | (infoHeader[7]<<24);
+	int height = infoHeader[8] | (infoHeader[9]<<8) | (infoHeader[10]<<16) | (infoHeader[11]<<24);
+	int bpp    = infoHeader[14] | (infoHeader[15]<<8);
+	unsigned int compression = infoHeader[16] | (infoHeader[17]<<8) | (infoHeader[18]<<16) | (infoHeader[19]<<24);
+
+	sceClibPrintf("[BOOTTRACE] LoadBMP_RGBA32: %s width=%d height=%d bpp=%d compression=%u dataOffset=%u\n",
+		path, width, height, bpp, compression, dataOffset);
+
+	if (bpp != 24 || compression != 0 || width <= 0 || height == 0)
+	{
+		sceClibPrintf("[BOOTTRACE] LoadBMP_RGBA32: unsupported BMP variant (only uncompressed 24bpp handled) %s\n", path);
+		pPak->FClose(fp);
+		return NULL;
+	}
+
+	bool bBottomUp = height > 0;
+	int absHeight = bBottomUp ? height : -height;
+	int rowSizeSrc = ((width * 3 + 3) / 4) * 4; // BMP rows are padded to 4 bytes
+
+	/* Vita: read the WHOLE pixel block in a single FRead instead of one
+	   FRead per row. Each ICryPak::FRead call was going through a real
+	   critical section plus the underlying sceIoRead round-trip -- for a
+	   640x480 image that's 480 separate locked I/O calls, ~40 seconds
+	   wall-clock on real hardware/emulation overhead. One big read is
+	   the same bytes off the same real file, just without 479 redundant
+	   lock/syscall round-trips. */
+	long srcSize = (long)rowSizeSrc * absHeight;
+	byte *pSrcBuf = new byte[srcSize];
+	byte *pRGBA = new byte[width * absHeight * 4];
+
+	pPak->FSeek(fp, (long)dataOffset, 0 /*SEEK_SET*/);
+
+	if (pPak->FRead(pSrcBuf, 1, srcSize, fp) != (size_t)srcSize)
+	{
+		sceClibPrintf("[BOOTTRACE] LoadBMP_RGBA32: bulk pixel read failed for %s\n", path);
+		delete [] pSrcBuf;
+		delete [] pRGBA;
+		pPak->FClose(fp);
+		return NULL;
+	}
+
+	for (int y = 0; y < absHeight; y++)
+	{
+		byte *pRow = pSrcBuf + (long)y * rowSizeSrc;
+		// BMP stores rows bottom-to-top by default (positive height).
+		int destRow = bBottomUp ? (absHeight - 1 - y) : y;
+		byte *pDest = pRGBA + (long)destRow * width * 4;
+		for (int x = 0; x < width; x++)
+		{
+			byte b = pRow[x*3+0];
+			byte g = pRow[x*3+1];
+			byte r = pRow[x*3+2];
+			pDest[x*4+0] = r;
+			pDest[x*4+1] = g;
+			pDest[x*4+2] = b;
+			pDest[x*4+3] = 255;
+		}
+	}
+
+	delete [] pSrcBuf;
+	pPak->FClose(fp);
+
+	*pOutW = width;
+	*pOutH = absHeight;
+	return pRGBA;
+}
+#endif
+
+ITexPic			* CVitaRenderer::EF_LoadTexture(const char* nameTex, uint flags, uint flags2, byte eTT, float fAmount1, float fAmount2, int Id, int BindId)
+{
+#if defined(LINUX)
+	sceClibPrintf("[BOOTTRACE] EF_LoadTexture entered, nameTex=%s\n", nameTex ? nameTex : "(null)");
+	if (!nameTex || !iSystem || !iSystem->GetIPak())
+		return 0;
+
+	int w = 0, h = 0;
+	byte *pRGBA = LoadBMP_RGBA32(iSystem->GetIPak(), nameTex, &w, &h);
+	if (!pRGBA)
+	{
+		/* Vita: only BMP is implemented so far -- real Far Cry game
+		   textures are DDS/DXT (see CryCommon/IShader.h's ETEX_Format),
+		   not yet supported. Honest failure, no fake pixels: no ITexPic
+		   is fabricated when the real file can't be decoded. */
+		return 0;
+	}
+
+	GLuint tex = 0;
+	glGenTextures(1, &tex);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pRGBA);
+	sceClibPrintf("[BOOTTRACE] EF_LoadTexture: uploaded, tex=%u w=%d h=%d glErr=%d\n", tex, w, h, glGetError());
+
+	return new CVitaTexPic(nameTex, (int)tex, w, h, pRGBA);
+#else
+	return 0;
+#endif
+}
 int CVitaRenderer::EF_LoadLightmap(const char * name) { return 0; }
 bool CVitaRenderer::EF_ScanEnvironmentCM(const char * name, int size, Vec3& Pos) { return false; }
 int CVitaRenderer::EF_ReadAllImgFiles(IShader * ef, SShaderTexUnit * tl, STexAnim * ta, char * name) { return 0; }

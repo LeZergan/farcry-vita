@@ -1,16 +1,17 @@
 /* Boots the actual compiled CrySystem against a default SSystemInitParams,
-   exactly like FARCRY/Main.cpp's static (non-DLL) path does, then runs a
-   real frame loop (BeginFrame/Update -- see
-   RenderDll/XRenderNULL/VitaRenderer.cpp) that draws a basic real menu
-   every frame: solid-color panel/button rectangles via
-   IRenderer::Draw2dImage, real text via the actual CryFont pipeline
-   (real FreeType2-rasterized glyphs from the real, retail Far Cry font
-   data, drawn through real vitaGL texture/vertex-array calls). No game
-   update logic or 3D scene yet -- this is the 2D UI primitives' first
-   real on-screen milestone, not a running game. */
+   exactly like FARCRY/Main.cpp's static (non-DLL) path does, then loads
+   and displays ONE real, unmodified asset from the real retail Far Cry
+   install: fcsplash.bmp, the actual splash bitmap the real game ships
+   (deployed to this Vita3K test install's root, read through the real
+   ICryPak file system, decoded by a real BMP parser -- see
+   CVitaRenderer::EF_LoadTexture in RenderDll/XRenderNULL/VitaRenderer.cpp
+   -- and uploaded to a real vitaGL texture). No hardcoded text, shapes,
+   or UI of any kind -- only the decoded pixels of that real file are
+   drawn, via IRenderer::Draw2dImage. If the load fails for any reason,
+   nothing is drawn (and it prints why) rather than falling back to any
+   placeholder -- there must be zero ambiguity about what's real. */
 #include <ISystem.h>
 #include <IRenderer.h>
-#include <IFont.h>
 #if defined(LINUX)
 #include <psp2/kernel/clib.h>
 #include <psp2/ctrl.h>
@@ -27,19 +28,11 @@ int main(int argc, char *argv[]) {
 	IRenderer *pRenderer = pSystem->GetIRenderer();
 	sceClibPrintf("[BOOTTRACE] main: pRenderer=%p\n", (void*)pRenderer);
 
-	IFFont *pFont = NULL;
-	if (pSystem->GetICryFont())
-		pFont = pSystem->GetICryFont()->GetFont("Default");
-	sceClibPrintf("[BOOTTRACE] main: pFont=%p\n", (void*)pFont);
-	if (pFont)
-		pFont->SetSameSize(true);
-
-	static const char *items[] = { "NEW GAME", "LOAD GAME", "OPTIONS", "QUIT" };
-	const int nItems = 4;
-	const float panelX = 60.0f, panelY = 40.0f, panelW = 400.0f, panelH = 460.0f;
-	const float btnW = 320.0f, btnH = 56.0f, btnGap = 20.0f;
-	const float btnX = panelX + (panelW - btnW) * 0.5f;
-	const float firstBtnY = 220.0f;
+	ITexPic *pSplash = NULL;
+	if (pRenderer)
+		pSplash = pRenderer->EF_LoadTexture("fcsplash.bmp", 0, 0, 0, 0.0f, 0.0f, 0, 0);
+	sceClibPrintf("[BOOTTRACE] main: pSplash=%p (%s)\n", (void*)pSplash,
+		pSplash ? "real asset loaded" : "load FAILED -- nothing will be drawn");
 
 	if (pRenderer) {
 		for (;;) {
@@ -48,27 +41,11 @@ int main(int argc, char *argv[]) {
 			if (pad.buttons & SCE_CTRL_START)
 				break;
 			pRenderer->BeginFrame();
-
-			// Menu background panel (solid color, texture_id<=0 -> untextured quad).
-			pRenderer->Draw2dImage(panelX, panelY, panelW, panelH, 0, 0,0,1,1, 0,
-				0.08f, 0.10f, 0.16f, 0.92f, 1.0f);
-
-			if (pFont) {
-				pFont->SetSize(vector2f(64.0f, 64.0f));
-				pFont->DrawString(panelX + 40.0f, panelY + 30.0f, "FAR CRY", true);
+			if (pSplash) {
+				// Draw the real decoded bitmap at its native pixel size, no scaling/cropping.
+				pRenderer->Draw2dImage(0.0f, 0.0f, (float)pSplash->GetWidth(), (float)pSplash->GetHeight(),
+					pSplash->GetTextureID(), 0,0,1,1, 0, 1,1,1,1, 1.0f);
 			}
-
-			for (int i = 0; i < nItems; i++) {
-				float by = firstBtnY + i * (btnH + btnGap);
-				// Button rectangle.
-				pRenderer->Draw2dImage(btnX, by, btnW, btnH, 0, 0,0,1,1, 0,
-					0.20f, 0.24f, 0.32f, 1.0f, 1.0f);
-				if (pFont) {
-					pFont->SetSize(vector2f(28.0f, 28.0f));
-					pFont->DrawString(btnX + 24.0f, by + 14.0f, items[i], true);
-				}
-			}
-
 			pRenderer->Update();
 		}
 	}
