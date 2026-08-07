@@ -47,14 +47,19 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 
 	
 	m_bLoadedFromScript=false;
-	if (CanGetValueFromScript() && m_pScriptSystem->GetGlobalValue(m_sName,sTempValue))
+	sceClibPrintf("[BOOTTRACE] CXConsoleVariable ctor: before CanGetValueFromScript, this=%p m_pScriptSystem=%p\n", (void*)this, (void*)m_pScriptSystem);
+	bool bCanGet = CanGetValueFromScript();
+	sceClibPrintf("[BOOTTRACE] CXConsoleVariable ctor: CanGetValueFromScript=%d\n", (int)bCanGet);
+	if (bCanGet && m_pScriptSystem->GetGlobalValue(m_sName,sTempValue))
 	{
 		m_bLoadedFromScript=true;
 		strcpy(m_sValue,sTempValue);
 		*m_fValue=(float)(atof(m_sValue));
 		*m_nValue=atoi(m_sValue);
 	}
+	sceClibPrintf("[BOOTTRACE] CXConsoleVariable ctor: before CreateTaggedValue\n");
 	m_hScriptTag=m_pScriptSystem->CreateTaggedValue(m_sName,m_sValue);
+	sceClibPrintf("[BOOTTRACE] CXConsoleVariable ctor: after CreateTaggedValue\n");
 }
 
 
@@ -176,9 +181,15 @@ CXConsoleVariable::~CXConsoleVariable()
 //////////////////////////////////////////////////////////////////////////
 bool CXConsoleVariable::CanGetValueFromScript()
 {
+	sceClibPrintf("[BOOTTRACE] CanGetValueFromScript: m_nFlags=%d\n", m_nFlags);
 	if (m_nFlags&(VF_CHEAT|VF_READONLY))
 	{
-		if (!((CSystem*)GetISystem())->IsDevMode())
+		sceClibPrintf("[BOOTTRACE] CanGetValueFromScript: flag matched, before GetISystem()\n");
+		ISystem *pSys = GetISystem();
+		sceClibPrintf("[BOOTTRACE] CanGetValueFromScript: GetISystem()=%p, before IsDevMode\n", (void*)pSys);
+		bool bDev = ((CSystem*)pSys)->IsDevMode();
+		sceClibPrintf("[BOOTTRACE] CanGetValueFromScript: IsDevMode=%d\n", (int)bDev);
+		if (!bDev)
 			return false;
 	}
 	return true;

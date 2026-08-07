@@ -37,10 +37,14 @@ _ACCESS_POOL;
 
 //////////////////////////////////////////////////////////////////////////
 // Pointer to Global ISystem.
-ISystem* GetISystem()
-{
-	return Cry3DEngineBase::m_pSys;
-}
+/* Vita: this module-local GetISystem() (returning Cry3DEngineBase::m_pSys,
+   set via this module's own original DLL entry point, which we never call
+   in a statically-linked build) collided with CrySystem/System.cpp's real
+   one under -Wl,--allow-multiple-definition -- the linker silently picked
+   one winner for every caller in the whole binary, and it wasn't always
+   the real one, returning NULL and crashing virtual calls through it.
+   Every module should share the one real GetISystem(); see
+   engine_port/compat/README.md. */
 //////////////////////////////////////////////////////////////////////////
 
 #if !defined(GAMECUBE) && !defined(PS2) && !defined(_XBOX) && !defined(LINUX)

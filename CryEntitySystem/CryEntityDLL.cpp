@@ -21,10 +21,9 @@ static char THIS_FILE[] = __FILE__;
 //////////////////////////////////////////////////////////////////////////
 // Pointer to Global ISystem.
 static ISystem* gISystem = 0;
-ISystem* GetISystem()
-{
-	return gISystem;
-}
+/* Vita: this module-local GetISystem() collided with CrySystem/System.cpp's
+   real one under -Wl,--allow-multiple-definition -- see Cry3DEngine.cpp for
+   the full explanation. */
 
 // Local var to turn on/off profiler.
 bool g_bProfilerEnabled = false;

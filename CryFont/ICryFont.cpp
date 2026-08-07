@@ -20,10 +20,9 @@ _ACCESS_POOL;
 
 ISystem *gISystem = 0;
 //! Get the system interface 
-ISystem	*GetISystem()
-{
-	return gISystem;
-}
+/* Vita: this module-local GetISystem() collided with CrySystem/System.cpp's
+   real one under -Wl,--allow-multiple-definition -- see Cry3DEngine.cpp for
+   the full explanation. */
 
 ///////////////////////////////////////////////
 extern "C" ICryFont* CreateCryFontInterface(ISystem *pSystem)

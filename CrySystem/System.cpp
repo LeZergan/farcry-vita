@@ -808,10 +808,11 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 
 	m_Time.MeasureTime("Enter SysUp");	
 	if (m_pStreamEngine)
+	{
 		m_pStreamEngine->Update(0);
-	
-	m_pStreamEngine->SetCallbackTimeQuota( m_sys_StreamCallbackTimeBudget->GetIVal() );
-	m_pStreamEngine->SetStreamCompressionMask( m_sys_StreamCompressionMask->GetIVal() );
+		m_pStreamEngine->SetCallbackTimeQuota( m_sys_StreamCallbackTimeBudget->GetIVal() );
+		m_pStreamEngine->SetStreamCompressionMask( m_sys_StreamCompressionMask->GetIVal() );
+	}
 
 	if (m_pICryCharManager)
 		m_pICryCharManager->Update();

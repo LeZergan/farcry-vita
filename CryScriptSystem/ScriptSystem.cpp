@@ -1756,22 +1756,26 @@ USER_DATA CScriptSystem::CreateUserData(INT_PTR nVal,int nCookie)	//AMD Port
 //////////////////////////////////////////////////////////////////////////
 // Pointer to Global ISystem.
 static ISystem* gISystem = 0;
-ISystem* GetISystem()
-{
-	return gISystem;
-}
+/* Vita: this module-local GetISystem() collided with CrySystem/System.cpp's
+   real one under -Wl,--allow-multiple-definition -- see Cry3DEngine.cpp for
+   the full explanation. */
 //////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////
 IScriptSystem *CreateScriptSystem(ISystem *pSystem,IScriptSystemSink *pSink, IScriptDebugSink *pDebugSink, bool bStdLibs)
 {
+	sceClibPrintf("[BOOTTRACE] CreateScriptSystem entered\n");
 	gISystem = pSystem;
+	sceClibPrintf("[BOOTTRACE] before new CScriptSystem\n");
 	CScriptSystem *pScriptSystem = new CScriptSystem;
+	sceClibPrintf("[BOOTTRACE] after new CScriptSystem, before Validate\n");
 	pScriptSystem->Validate();
+	sceClibPrintf("[BOOTTRACE] after Validate, before Init\n");
 	if (!pScriptSystem->Init(pSink, pDebugSink, bStdLibs, 1024))
 	{
 		pScriptSystem->Release();
 	}
+	sceClibPrintf("[BOOTTRACE] after Init, returning\n");
 	return pScriptSystem;
 }
 

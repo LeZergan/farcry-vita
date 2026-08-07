@@ -26,10 +26,9 @@ float g_costab[SINCOSTABSZ],g_sintab[SINCOSTABSZ];
 //////////////////////////////////////////////////////////////////////////
 // Pointer to Global ISystem.
 static ISystem* gISystem = 0;
-ISystem* GetISystem()
-{
-	return gISystem;
-}
+/* Vita: this module-local GetISystem() collided with CrySystem/System.cpp's
+   real one under -Wl,--allow-multiple-definition -- see Cry3DEngine.cpp for
+   the full explanation. */
 //////////////////////////////////////////////////////////////////////////
 
 #ifdef _WIN32

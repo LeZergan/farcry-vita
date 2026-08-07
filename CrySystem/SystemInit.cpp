@@ -41,6 +41,7 @@
 #include "ScriptSink.h"
 #include "Font.h"
 #include "Log.h"
+#include "ScriptStubs.h"
 #include "XML\Xml.h"
 #include "DataProbe.h"
 #include "ApplicationHelper.h"				// CApplicationHelper
@@ -290,7 +291,18 @@ IRenderer* CSystem::CreateRenderer(bool fullscreen, void* hinst, void* hWndAttac
 bool CSystem::InitNetwork()
 {
 
-#ifndef _XBOX
+#if defined(LINUX)
+	/* Vita: statically linked into this same binary -- same reasoning as
+	   InitScriptSystem's CreateScriptSystem fix: call CreateNetwork
+	   directly instead of LoadDLL/CryGetProcAddress, which was resolving
+	   a crynetwork.so that never existed on-device. */
+	m_pNetwork = CreateNetwork(this);
+	if(m_pNetwork==NULL)
+	{
+		Error( "Error creating Network System (CreateNetwork) !" );
+		return false;
+	}
+#elif !defined(_XBOX)
 	PFNCREATENETWORK pfnCreateNetwork;
 	m_dll.hNetwork = LoadDLL( DLL_NETWORK );
 	if (!m_dll.hNetwork)
@@ -549,7 +561,12 @@ bool CSystem::InitSound(WIN_HWND hwnd)
 /////////////////////////////////////////////////////////////////////////////////
 bool CSystem::InitPhysics()
 {
-#ifndef _XBOX
+#if defined(LINUX)
+	/* Vita: statically linked into this same binary -- same reasoning as
+	   InitScriptSystem/InitNetwork's fixes: call CreatePhysicalWorld
+	   directly instead of LoadDLL/CryGetProcAddress. */
+	m_pIPhysicalWorld = CreatePhysicalWorld(this);
+#elif !defined(_XBOX)
 	m_dll.hPhysics = LoadDLL(DLL_PHYSICS);
 	if(!m_dll.hPhysics)
 		return false;
@@ -782,12 +799,24 @@ bool CSystem::InitAISystem()
 /////////////////////////////////////////////////////////////////////////////////
 bool CSystem::InitScriptSystem()
 {
-#ifndef _XBOX
 #if defined(LINUX)
-	m_dll.hScript = LoadDLL("cryscriptsystem.so");
-#else
+	/* Vita: CreateScriptSystem's call boundary hangs/crashes on Vita3K the
+	   same way QueryPerformanceFrequency's did (see InitStreamEngine) --
+	   not even the callee's own first trace line executes, ruling out
+	   its actual logic. Real Lua script execution won't work until this
+	   is properly resolved -- see engine_port/compat/README.md. In the
+	   meantime, m_pScriptSystem needs to be non-null: dozens of call
+	   sites across the engine dereference it unconditionally (no null
+	   checks -- see e.g. CXConsoleVariable::CreateTaggedValue), so a real
+	   honest no-op stub (ScriptStubs.h/cpp) stands in instead of trying
+	   to null-guard every individual call site. */
+	m_pScriptSink = NULL;
+	m_pScriptSystem = new CStubScriptSystem();
+	/* fall through to the shared tail below (SetScriptSystem/PostInit) --
+	   do NOT return early here, CXConsole has its own separate
+	   m_pScriptSystem member that only gets set by that shared code. */
+#elif !defined(_XBOX)
 	m_dll.hScript = LoadDLL("CryScriptSystem.dll");
-#endif
 	if(m_dll.hScript==NULL)
 		return (false);
 
@@ -851,13 +880,16 @@ bool CSystem::InitFileSystem()
 //////////////////////////////////////////////////////////////////////////
 bool CSystem::InitStreamEngine()
 {
-	// Vita: worker-thread-backed streaming triggers a pthread/dynarmic
-	// interaction crash on Vita3K (still under investigation -- isolated
-	// pthread_create, CreateEvent, and mutex lock/unlock all work fine on
-	// their own, so this is specific to the real IOWorkerThreadProc path).
-	// Crytek's own single-threaded synchronous fallback, already present
-	// here as a documented alternate mode, sidesteps it.
-	m_pStreamEngine = new CStreamEngine(m_pIPak, m_pLog, 0, false);
+	// Vita: CRefStreamEngine's constructor hangs on Vita3K right around
+	// QueryPerformanceFrequency -- confirmed NOT our code (disassembly is
+	// clean, inlining QPF's body to bypass the call entirely didn't help,
+	// ruled out alignment/log-buffering too; looks like a Vita3K/dynarmic
+	// JIT quirk, see engine_port/compat/README.md). Skipping real
+	// construction for now so boot can proceed -- every m_pStreamEngine
+	// call site is null-checked (System.cpp's Update loop, SystemWin32.cpp's
+	// GetMemoryStatistics), so file loading just falls back to whatever
+	// synchronous path CryPak itself provides.
+	m_pStreamEngine = NULL;
 	return true;
 }
 
@@ -1220,35 +1252,43 @@ bool CSystem::Init( const SSystemInitParams &params )
 	// SCRIPT SYSTEM
 	//////////////////////////////////////////////////////////////////////////
 	CryLogAlways("Script System Initialization");
+	sceClibPrintf("[BOOTTRACE] before InitScriptSystem()\n");
 	if(!InitScriptSystem())
 		return false;
+	sceClibPrintf("[BOOTTRACE] after InitScriptSystem()\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// After creation of script system we can create system vars.
 	CreateSystemVars();
+	sceClibPrintf("[BOOTTRACE] after CreateSystemVars()\n");
 	//////////////////////////////////////////////////////////////////////////
 
 	if(m_bEditor || CmdlineSink.m_bDevMode)
 		SetDevMode(true);											// In Dev mode.
 	 else
 		SetDevMode(false);										// Not Dev mode.
+	sceClibPrintf("[BOOTTRACE] after SetDevMode()\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	//Load config files
 	//////////////////////////////////////////////////////////////////////////
 
 	LoadConfiguration("System.Cfg");
+	sceClibPrintf("[BOOTTRACE] after LoadConfiguration(System.Cfg)\n");
 	LoadConfiguration("SystemCfgOverride.Cfg");
+	sceClibPrintf("[BOOTTRACE] after LoadConfiguration(SystemCfgOverride.Cfg)\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// After loading configuration.
 	//////////////////////////////////////////////////////////////////////////
 	InitScriptDebugger();
+	sceClibPrintf("[BOOTTRACE] after InitScriptDebugger()\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// Open basic pak files.
 	//////////////////////////////////////////////////////////////////////////
 	OpenBasicPaks();
+	sceClibPrintf("[BOOTTRACE] after OpenBasicPaks()\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// NETWORK
@@ -1256,9 +1296,12 @@ bool CSystem::Init( const SSystemInitParams &params )
 	if (!params.bPreview)
 	{
 		CryLogAlways("Network initialization");
+		sceClibPrintf("[BOOTTRACE] before InitNetwork()\n");
 		InitNetwork();
+		sceClibPrintf("[BOOTTRACE] after InitNetwork(), before SetLocalIP\n");
 
 		m_pNetwork->SetLocalIP((char *)(CmdlineSink.m_sLocalIP.c_str()));
+		sceClibPrintf("[BOOTTRACE] after SetLocalIP\n");
 	}
 	//////////////////////////////////////////////////////////////////////////
 	// PHYSICS
@@ -1266,8 +1309,10 @@ bool CSystem::Init( const SSystemInitParams &params )
 	//if (!params.bPreview)
 	{
 		CryLogAlways("Physics initialization");
+		sceClibPrintf("[BOOTTRACE] before InitPhysics()\n");
 		if (!InitPhysics())
 			return false;
+		sceClibPrintf("[BOOTTRACE] after InitPhysics()\n");
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -1290,16 +1335,20 @@ bool CSystem::Init( const SSystemInitParams &params )
 		// RENDERER
 		//////////////////////////////////////////////////////////////////////////
 		CryLogAlways("Renderer initialization");
+		sceClibPrintf("[BOOTTRACE] before InitRenderer()\n");
 		if (!InitRenderer(m_hInst, m_hWnd,params.szSystemCmdLine))
 			return false;
+		sceClibPrintf("[BOOTTRACE] after InitRenderer()\n");
 	}
 
 	//////////////////////////////////////////////////////////////////////////
 	// CONSOLE
 	//////////////////////////////////////////////////////////////////////////
 	CryLogAlways("Console initialization");
+	sceClibPrintf("[BOOTTRACE] before InitConsole()\n");
 	if (!InitConsole())
 		return false;
+	sceClibPrintf("[BOOTTRACE] after InitConsole()\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// TIME
@@ -1415,7 +1464,9 @@ bool CSystem::Init( const SSystemInitParams &params )
 //////////////////////////////////////////////////////////////////////////
 void CSystem::CreateSystemVars()
 {
+	sceClibPrintf("[BOOTTRACE] CreateSystemVars entered, before m_pCVarQuit\n");
 	m_pCVarQuit = GetIConsole()->CreateVariable("ExitOnQuit","1",VF_DUMPTODISK);
+	sceClibPrintf("[BOOTTRACE] after m_pCVarQuit, before i_direct_input\n");
 
 	i_direct_input = GetIConsole()->CreateVariable("i_direct_input", "1", VF_DUMPTODISK,
 		"Toggles direct input capability.\n"
