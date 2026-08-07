@@ -8,6 +8,11 @@
 
 #if defined(LINUX)
 #include <vitaGL.h>
+#include <CRESky.h>
+#include <CREDummy.h>
+#include <CRE2DQuad.h>
+#include <CREScreenProcess.h>
+#include <CRETerrainSector.h>
 #endif
 
 CVitaRenderer *gcpVitaRenderer = NULL;
@@ -791,7 +796,41 @@ bool CVitaRenderer::EF_HideTemplate(const char * name) { return false; }
 bool CVitaRenderer::EF_UnhideTemplate(const char * name) { return false; }
 bool CVitaRenderer::EF_UnhideAllTemplates() { return false; }
 bool CVitaRenderer::EF_SetLightHole(Vec3 vPos, Vec3 vNormal, int idTex, float fScale, bool bAdditive) { return false; }
-CRendElement * CVitaRenderer::EF_CreateRE(EDataType edt) { return 0; }
+/* Vita: real, unmodified CRendElement subclasses (CryCommon/CRESky.h etc)
+   -- not stand-ins, the actual classes C3DEngine's constructor asks for by
+   type, already compiled into this binary. Their mfPrepare/mfDraw are
+   still real methods that call into the rest of the (not-yet-real-on-
+   Vita) render pipeline, so this doesn't make the 3D engine draw
+   anything by itself -- it just gives C3DEngine's constructor real,
+   valid, non-null objects to hold instead of crashing on a null deref.
+   Types C3DEngine doesn't touch at construction time are left as an
+   honest null (see IRenderer.h's EDataType for what's not handled). */
+CRendElement * CVitaRenderer::EF_CreateRE(EDataType edt)
+{
+#if defined(LINUX)
+	switch (edt)
+	{
+		case eDATA_Sky:              return new CRESky();
+		case eDATA_Dummy:            return new CREDummy();
+		case eDATA_TerrainParticles: return new CRETerrainParticles();
+		case eDATA_2DQuad:           return new CRE2DQuad();
+		case eDATA_ScreenProcess:
+			/* Vita: unlike CRESky/CRE2DQuad, CREScreenProcess's real
+			   constructor itself (not just mfDraw) calls into real shader
+			   loading (CScreenVars::Create() -> CPShader/CVProgram::
+			   mfForName) -- deeper than a couple of no-op virtual overrides
+			   can stand in for. Honest null: never dereferenced in
+			   C3DEngine's constructor (only SAFE_RELEASE'd, which null-
+			   checks), so this doesn't crash, it's just not implemented yet. */
+			return 0;
+		default:
+			sceClibPrintf("[BOOTTRACE] EF_CreateRE: unhandled EDataType=%d, returning null\n", (int)edt);
+			return 0;
+	}
+#else
+	return 0;
+#endif
+}
 void CVitaRenderer::EF_StartEf() { }
 CCObject * CVitaRenderer::EF_GetObject(bool bTemp, int num) { return 0; }
 void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRenderShaderResources * sr, CCObject * obj, int nTempl, IShader * efState, int nSort) { }

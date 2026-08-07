@@ -1050,23 +1050,19 @@ bool CSystem::Init3DEngine()
 {
   ::SetLastError(0);
 #if defined(LINUX)
-	/* Vita: C3DEngine's constructor unconditionally dereferences results
-	   from GetRenderer()->EF_LoadTexture/EF_CreateRE/EF_LoadShader (e.g.
-	   `pPic->GetTextureID()` right after EF_LoadTexture) with no null
-	   check -- same "always non-null, always valid" assumption pattern
-	   as IScriptSystem (see ScriptStubs.h/.cpp), but CVitaRenderer's
-	   mechanically-stubbed methods correctly return null for the ~200
-	   methods with no real implementation yet (see VitaRenderer.h).
-	   Building real dummy ITexPic/IShader/CRendElement objects for every
-	   resource type C3DEngine touches is a large separate undertaking on
-	   the same scale as the CRenderer/XRenderOGL port itself -- not
-	   started. Skip real 3D-engine construction on Vita for now so boot
-	   can reach the actual game loop (BeginFrame/Update -- see
-	   VitaRenderer.cpp) and put a real cleared frame on screen; scene/
-	   asset rendering is the next milestone after that. */
-	m_pI3DEngine = NULL;
-	sceClibPrintf("[BOOTTRACE] Init3DEngine: skipped on Vita (see comment), returning true\n");
-	return true;
+	/* Vita: C3DEngine's constructor used to unconditionally dereference
+	   results from GetRenderer()->EF_LoadTexture/EF_CreateRE (e.g.
+	   `pPic->GetTextureID()` right after EF_LoadTexture, `m_pRESky->
+	   m_fAlpha=...` right after EF_CreateRE) with no null check --
+	   CVitaRenderer's EF_CreateRE now returns real CRendElement subclass
+	   instances for the specific types the constructor touches, and the
+	   three unguarded texture-ID derefs got real null checks (see
+	   3DEngine.cpp). Statically linked into this binary already (same
+	   direct-call pattern as CreateScriptSystem/CreateCharManager
+	   elsewhere in this function) -- no LoadDLL indirection needed. */
+	sceClibPrintf("[BOOTTRACE] Init3DEngine: before real CreateCry3DEngine\n");
+	m_pI3DEngine = CreateCry3DEngine(this, g3deInterfaceVersion);
+	sceClibPrintf("[BOOTTRACE] Init3DEngine: after real CreateCry3DEngine, m_pI3DEngine=%p\n", (void*)m_pI3DEngine);
 #else
   m_dll.h3DEngine = LoadDLL(DLL_3DENGINE);
 	if (!m_dll.h3DEngine)
