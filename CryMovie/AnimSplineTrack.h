@@ -61,7 +61,7 @@ public:
 	{
 		assert( index >= 0 && index < GetNumKeys() );
 		assert( key != 0 );
-		Spline::key_type &k = m_spline->key(index);
+		typename Spline::key_type &k = m_spline->key(index);
 		ITcbKey *tcbkey = (ITcbKey*)key;
 		tcbkey->time = k.time;
 		tcbkey->flags = k.flags;
@@ -79,7 +79,7 @@ public:
 	{
 		assert( index >= 0 && index < GetNumKeys() );
 		assert( key != 0 );
-		Spline::key_type &k = m_spline->key(index);
+		typename Spline::key_type &k = m_spline->key(index);
 		ITcbKey *tcbkey = (ITcbKey*)key;
 		k.time = tcbkey->time;
 		k.flags = tcbkey->flags;

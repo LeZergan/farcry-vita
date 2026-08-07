@@ -338,31 +338,31 @@ template	<class T>
 inline	void TCBSpline<T>::compMiddleDeriv( int curr )	{
 	float	dsA,dsB,ddA,ddB;
 	float	A,B,cont1,cont2;
-	int last = num_keys() - 1;
+	int last = this->num_keys() - 1;
 
 	// dsAdjust,ddAdjust apply speed correction when continuity is 0.
 	// Middle key.
 	if (curr == 0)	{
 		// First key.
-		float dts = (GetRangeEnd() - time(last)) + (time(0) - GetRangeStart());
-		float dt = 2.0f / (dts + time(1) - time(0));
+		float dts = (this->GetRangeEnd() - this->time(last)) + (this->time(0) - this->GetRangeStart());
+		float dt = 2.0f / (dts + this->time(1) - this->time(0));
 		dsA = dt * dts;
-		ddA = dt * (time(1) - time(0));
+		ddA = dt * (this->time(1) - this->time(0));
 	}	else	{
 		if (curr == last)	{
 			// Last key.
-			float dts = (GetRangeEnd() - time(last)) + (time(0) - GetRangeStart());
-			float dt = 2.0f / (dts + time(last) - time(last-1));
+			float dts = (this->GetRangeEnd() - this->time(last)) + (this->time(0) - this->GetRangeStart());
+			float dt = 2.0f / (dts + this->time(last) - this->time(last-1));
 			dsA = dt * dts;
-			ddA = dt * (time(last) - time(last-1));
+			ddA = dt * (this->time(last) - this->time(last-1));
 		}	else	{
 			// Middle key.
-			float dt = 2.0f/(time(curr+1) - time(curr-1));
-			dsA = dt * (time(curr) - time(curr-1));
-			ddA = dt * (time(curr+1) - time(curr));
+			float dt = 2.0f/(this->time(curr+1) - this->time(curr-1));
+			dsA = dt * (this->time(curr) - this->time(curr-1));
+			ddA = dt * (this->time(curr+1) - this->time(curr));
 		}
 	}
-	key_type &k = key(curr);
+	typename TCBSpline<T>::key_type &k = this->key(curr);
 
 	float c = (float)fabs(k.cont);
 	float sa = dsA + c*(1.0f - dsA);
@@ -382,32 +382,32 @@ inline	void TCBSpline<T>::compMiddleDeriv( int curr )	{
 	ddB = da * B * cont1;
 
 	T qp,qn;
-	if (curr > 0) qp = value(curr-1);	else qp = value(last);
-	if (curr < last) qn = value(curr+1); else qn = value(0);
+	if (curr > 0) qp = this->value(curr-1);	else qp = this->value(last);
+	if (curr < last) qn = this->value(curr+1); else qn = this->value(0);
 	k.ds = dsA*(k.value - qp) + dsB*(qn - k.value);
 	k.dd = ddA*(k.value - qp) + ddB*(qn - k.value);
 }
 
 template	<class T>
 inline	void TCBSpline<T>::compFirstDeriv()	{
-	key_type &k = key(0);
+	typename TCBSpline<T>::key_type &k = this->key(0);
 	Zero(k.ds);
-	k.dd = 0.5f*(1.0f - k.tens)*( 3.0f*(value(1) - k.value) - ds(1));
+	k.dd = 0.5f*(1.0f - k.tens)*( 3.0f*(this->value(1) - k.value) - this->ds(1));
 }
 
 template	<class T>
 inline	void TCBSpline<T>::compLastDeriv()	{
-	int last = num_keys() - 1;
-	key_type &k = key(last);
-	k.ds = -0.5f*(1.0f - k.tens)*( 3.0f*(value(last-1) - k.value) + dd(last-1) );
+	int last = this->num_keys() - 1;
+	typename TCBSpline<T>::key_type &k = this->key(last);
+	k.ds = -0.5f*(1.0f - k.tens)*( 3.0f*(this->value(last-1) - k.value) + this->dd(last-1) );
 	Zero(k.dd);
 }
 
 template	<class T>
 inline	void TCBSpline<T>::comp2KeyDeriv()	{
-	key_type &k1 = key(0);
-	key_type &k2 = key(1);
-	value_type val = value(1) - value(0);
+	typename TCBSpline<T>::key_type &k1 = this->key(0);
+	typename TCBSpline<T>::key_type &k2 = this->key(1);
+	typename TCBSpline<T>::value_type val = this->value(1) - this->value(0);
 	
 	Zero(k1.ds);
 	k1.dd = (1.0f - k1.tens)*val;
@@ -417,25 +417,25 @@ inline	void TCBSpline<T>::comp2KeyDeriv()	{
 
 template	<class T>
 inline	void	TCBSpline<T>::comp_deriv() 	{
-	if (num_keys() > 1)	{
-		if ((num_keys() == 2) && !closed())	{
+	if (this->num_keys() > 1)	{
+		if ((this->num_keys() == 2) && !this->closed())	{
 			comp2KeyDeriv();
 			return;
 		}
-		if (closed()) {
-			for (int i = 0; i < num_keys(); ++i)	{
+		if (this->closed()) {
+			for (int i = 0; i < this->num_keys(); ++i)	{
 				compMiddleDeriv( i );
 			}
 		}	else	{
-			for (int i = 1; i < (num_keys()-1); ++i)	{
+			for (int i = 1; i < (this->num_keys()-1); ++i)	{
 				compMiddleDeriv( i );
 			}
 			compFirstDeriv();
 			compLastDeriv();
 		}
 	}
-	m_curr = 0;
-	m_flags &= ~MODIFIED;	// clear MODIFIED flag.
+	this->m_curr = 0;
+	this->m_flags &= ~this->MODIFIED;	// clear MODIFIED flag.
 }
 
 template	<class T>
@@ -466,12 +466,12 @@ inline	float	TCBSpline<T>::calc_ease( float t,float a,float b )	{
 template <class T>
 inline	void	TCBSpline<T>::interp_keys( int from,int to,float u,T& val )
 {
-	u = calc_ease( u,key(from).easefrom,key(to).easeto );
-	basis_type basis( u );
+	u = calc_ease( u,this->key(from).easefrom,this->key(to).easeto );
+	typename TCBSpline<T>::basis_type basis( u );
 
 	// Changed by Sergiy&Ivo
 	//val = (basis[0]*value(from)) + (basis[1]*value(to)) + (basis[2]*dd(from)) + (basis[3]*ds(to));
-	val = Concatenate( Concatenate( Concatenate( (basis[0]*value(from)) , (basis[1]*value(to))) , (basis[2]*dd(from))) , (basis[3]*ds(to)));
+	val = Concatenate( Concatenate( Concatenate( (basis[0]*this->value(from)) , (basis[1]*this->value(to))) , (basis[2]*this->dd(from))) , (basis[3]*this->ds(to)));
 
 }
 

@@ -667,7 +667,8 @@ void CMovieSystem::Serialize( XmlNodeRef &xmlNode,bool bLoading,bool bRemoveOldN
 		{
 			for (int i=0;i<seqNode->getChildCount();i++)
 			{
-				if (!LoadSequence(seqNode->getChild(i), bLoadEmpty))
+				XmlNodeRef childNode = seqNode->getChild(i);
+				if (!LoadSequence(childNode, bLoadEmpty))
 					return;
 			}
 		}
