@@ -34,6 +34,19 @@ int main(int argc, char *argv[]) {
 	sceClibPrintf("[BOOTTRACE] main: pSplash=%p (%s)\n", (void*)pSplash,
 		pSplash ? "real asset loaded" : "load FAILED -- nothing will be drawn");
 
+	/* Vita: NOT loading a second real DDS texture here on purpose. The
+	   real DXT decoder (LoadDDS_RGBA32 in VitaRenderer.cpp) is verified
+	   correct -- CSystem::Init() already loads and uploads a real 256x256
+	   DXT3 texture (Textures/Console/DefaultConsole.dds) from this exact
+	   pak during boot, confirmed via BOOTTRACE. But requesting a SECOND
+	   real texture out of the same already-open .pak (tried here with
+	   Textures/gui/mousecursor.dds) hangs indefinitely inside
+	   CCachedFileData::GetData()/CMTSafeHeap -- a real, reproducible bug
+	   in the ported pak/heap code, not in the DDS decoder. Left as a
+	   known follow-up rather than worked around, since silently avoiding
+	   it here would hide a bug that blocks loading more than one real
+	   game texture per pak. */
+
 	if (pRenderer) {
 		for (;;) {
 			SceCtrlData pad;

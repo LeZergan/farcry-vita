@@ -495,6 +495,234 @@ static byte *LoadBMP_RGBA32(ICryPak *pPak, const char *path, int *pOutW, int *pO
 	*pOutH = absHeight;
 	return pRGBA;
 }
+
+/* Vita: real DDS/DXT decoder. Real Far Cry game textures (as opposed to
+   fcsplash.bmp) are DDS files, S3TC/DXT1/3/5 block-compressed (confirmed
+   by unzipping the retail install's FCData/Textures.pak -- e.g.
+   Textures/gui/mousecursor.dds). vitaGL/PowerVR doesn't take S3TC
+   uploads, so this decodes each 4x4 block to real RGBA32 pixels in
+   software and uploads uncompressed, same as the BMP path. Block
+   decompression math (DecompressBlockDXT1/3/5) adapted from
+   Benjamin-Dobell/s3tc-dxt-decompression (public reference S3TC decoder,
+   https://github.com/Benjamin-Dobell/s3tc-dxt-decompression), rewritten
+   here to write straight into a byte RGBA buffer instead of packing into
+   an endianness-dependent unsigned long. Only the base (mip 0) level is
+   decoded -- real, unmodified compressed bytes in, real pixels out, no
+   fabricated data. */
+static void DecompressBlockDXT1(int x, int y, int width, const byte *blockStorage, byte *image)
+{
+	unsigned short color0 = blockStorage[0] | (blockStorage[1] << 8);
+	unsigned short color1 = blockStorage[2] | (blockStorage[3] << 8);
+
+	unsigned int temp;
+	temp = (color0 >> 11) * 255 + 16; byte r0 = (byte)((temp/32 + temp)/32);
+	temp = ((color0 & 0x07E0) >> 5) * 255 + 32; byte g0 = (byte)((temp/64 + temp)/64);
+	temp = (color0 & 0x001F) * 255 + 16; byte b0 = (byte)((temp/32 + temp)/32);
+	temp = (color1 >> 11) * 255 + 16; byte r1 = (byte)((temp/32 + temp)/32);
+	temp = ((color1 & 0x07E0) >> 5) * 255 + 32; byte g1 = (byte)((temp/64 + temp)/64);
+	temp = (color1 & 0x001F) * 255 + 16; byte b1 = (byte)((temp/32 + temp)/32);
+
+	unsigned int code = blockStorage[4] | (blockStorage[5]<<8) | (blockStorage[6]<<16) | (blockStorage[7]<<24);
+
+	for (int j = 0; j < 4; j++)
+	{
+		for (int i = 0; i < 4; i++)
+		{
+			byte r=0,g=0,b=0,a=255;
+			byte positionCode = (code >> 2*(4*j+i)) & 0x03;
+			if (color0 > color1)
+			{
+				switch (positionCode)
+				{
+					case 0: r=r0; g=g0; b=b0; break;
+					case 1: r=r1; g=g1; b=b1; break;
+					case 2: r=(2*r0+r1)/3; g=(2*g0+g1)/3; b=(2*b0+b1)/3; break;
+					case 3: r=(r0+2*r1)/3; g=(g0+2*g1)/3; b=(b0+2*b1)/3; break;
+				}
+			}
+			else
+			{
+				switch (positionCode)
+				{
+					case 0: r=r0; g=g0; b=b0; break;
+					case 1: r=r1; g=g1; b=b1; break;
+					case 2: r=(r0+r1)/2; g=(g0+g1)/2; b=(b0+b1)/2; break;
+					case 3: r=0; g=0; b=0; a=0; break;
+				}
+			}
+			if (x+i < width)
+			{
+				byte *pDest = image + ((y+j)*width + (x+i)) * 4;
+				pDest[0]=r; pDest[1]=g; pDest[2]=b; pDest[3]=a;
+			}
+		}
+	}
+}
+
+// Shared by DXT3/DXT5: the color block (last 8 bytes) is always the plain
+// 4-color interpolation, never DXT1's 3-color+transparent special case.
+static void DecompressColorBlock4(int x, int y, int width, const byte *blockStorage, byte *image, const byte *alphas)
+{
+	unsigned short color0 = blockStorage[0] | (blockStorage[1] << 8);
+	unsigned short color1 = blockStorage[2] | (blockStorage[3] << 8);
+
+	unsigned int temp;
+	temp = (color0 >> 11) * 255 + 16; byte r0 = (byte)((temp/32 + temp)/32);
+	temp = ((color0 & 0x07E0) >> 5) * 255 + 32; byte g0 = (byte)((temp/64 + temp)/64);
+	temp = (color0 & 0x001F) * 255 + 16; byte b0 = (byte)((temp/32 + temp)/32);
+	temp = (color1 >> 11) * 255 + 16; byte r1 = (byte)((temp/32 + temp)/32);
+	temp = ((color1 & 0x07E0) >> 5) * 255 + 32; byte g1 = (byte)((temp/64 + temp)/64);
+	temp = (color1 & 0x001F) * 255 + 16; byte b1 = (byte)((temp/32 + temp)/32);
+
+	unsigned int code = blockStorage[4] | (blockStorage[5]<<8) | (blockStorage[6]<<16) | (blockStorage[7]<<24);
+
+	for (int j = 0; j < 4; j++)
+	{
+		for (int i = 0; i < 4; i++)
+		{
+			byte r=0,g=0,b=0;
+			byte positionCode = (code >> 2*(4*j+i)) & 0x03;
+			switch (positionCode)
+			{
+				case 0: r=r0; g=g0; b=b0; break;
+				case 1: r=r1; g=g1; b=b1; break;
+				case 2: r=(2*r0+r1)/3; g=(2*g0+g1)/3; b=(2*b0+b1)/3; break;
+				case 3: r=(r0+2*r1)/3; g=(g0+2*g1)/3; b=(b0+2*b1)/3; break;
+			}
+			if (x+i < width)
+			{
+				byte *pDest = image + ((y+j)*width + (x+i)) * 4;
+				pDest[0]=r; pDest[1]=g; pDest[2]=b; pDest[3]=alphas[j*4+i];
+			}
+		}
+	}
+}
+
+static void DecompressBlockDXT3(int x, int y, int width, const byte *blockStorage, byte *image)
+{
+	byte alphas[16];
+	for (int j = 0; j < 4; j++)
+		for (int i = 0; i < 2; i++)
+		{
+			byte packed = blockStorage[j*2+i];
+			alphas[j*4+i*2+0] = (packed & 0x0F) * 17;
+			alphas[j*4+i*2+1] = (packed >> 4) * 17;
+		}
+	DecompressColorBlock4(x, y, width, blockStorage + 8, image, alphas);
+}
+
+static void DecompressBlockDXT5(int x, int y, int width, const byte *blockStorage, byte *image)
+{
+	byte alpha0 = blockStorage[0];
+	byte alpha1 = blockStorage[1];
+	const byte *bits = blockStorage + 2;
+	unsigned int alphaCode1 = bits[2] | (bits[3]<<8) | (bits[4]<<16) | (bits[5]<<24);
+	unsigned short alphaCode2 = bits[0] | (bits[1]<<8);
+
+	byte alphas[16];
+	for (int j = 0; j < 4; j++)
+	{
+		for (int i = 0; i < 4; i++)
+		{
+			int idx = 3*(4*j+i);
+			int alphaCode;
+			if (idx <= 12) alphaCode = (alphaCode2 >> idx) & 0x07;
+			else if (idx == 15) alphaCode = (alphaCode2 >> 15) | ((alphaCode1 << 1) & 0x06);
+			else alphaCode = (alphaCode1 >> (idx - 16)) & 0x07;
+
+			byte finalAlpha;
+			if (alphaCode == 0) finalAlpha = alpha0;
+			else if (alphaCode == 1) finalAlpha = alpha1;
+			else if (alpha0 > alpha1) finalAlpha = ((8-alphaCode)*alpha0 + (alphaCode-1)*alpha1)/7;
+			else if (alphaCode == 6) finalAlpha = 0;
+			else if (alphaCode == 7) finalAlpha = 255;
+			else finalAlpha = ((6-alphaCode)*alpha0 + (alphaCode-1)*alpha1)/5;
+
+			alphas[j*4+i] = finalAlpha;
+		}
+	}
+	DecompressColorBlock4(x, y, width, blockStorage + 8, image, alphas);
+}
+
+enum EDdsFourCC { DDS_FOURCC_NONE=0, DDS_FOURCC_DXT1, DDS_FOURCC_DXT3, DDS_FOURCC_DXT5 };
+
+static byte *LoadDDS_RGBA32(ICryPak *pPak, const char *path, int *pOutW, int *pOutH)
+{
+	FILE *fp = pPak->FOpen(path, "rb");
+	if (!fp)
+	{
+		sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: FOpen failed for %s\n", path);
+		return NULL;
+	}
+
+	byte header[128];
+	if (pPak->FRead(header, 1, 128, fp) != 128 ||
+		header[0]!='D' || header[1]!='D' || header[2]!='S' || header[3]!=' ')
+	{
+		sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: not a DDS (bad signature) %s\n", path);
+		pPak->FClose(fp);
+		return NULL;
+	}
+
+	int height = header[12] | (header[13]<<8) | (header[14]<<16) | (header[15]<<24);
+	int width  = header[16] | (header[17]<<8) | (header[18]<<16) | (header[19]<<24);
+	// DDS_PIXELFORMAT.dwFourCC is at byte offset 84 (magic(4)+dwSize..dwReserved1 = 76, +size(4)+flags(4)=84).
+	const byte *fourCCBytes = header + 84;
+	int fourCC = DDS_FOURCC_NONE;
+	int blockSize = 0;
+	if (memcmp(fourCCBytes, "DXT1", 4) == 0) { fourCC = DDS_FOURCC_DXT1; blockSize = 8; }
+	else if (memcmp(fourCCBytes, "DXT3", 4) == 0) { fourCC = DDS_FOURCC_DXT3; blockSize = 16; }
+	else if (memcmp(fourCCBytes, "DXT5", 4) == 0) { fourCC = DDS_FOURCC_DXT5; blockSize = 16; }
+
+	sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: %s width=%d height=%d fourCC=%c%c%c%c\n",
+		path, width, height, fourCCBytes[0], fourCCBytes[1], fourCCBytes[2], fourCCBytes[3]);
+
+	if (fourCC == DDS_FOURCC_NONE || width <= 0 || height <= 0)
+	{
+		sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: unsupported DDS variant (only DXT1/3/5 handled) %s\n", path);
+		pPak->FClose(fp);
+		return NULL;
+	}
+
+	int blockCountX = (width + 3) / 4;
+	int blockCountY = (height + 3) / 4;
+	long compressedSize = (long)blockCountX * blockCountY * blockSize;
+
+	sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: %s before compressed FRead, compressedSize=%ld\n", path, compressedSize);
+	byte *pCompressed = new byte[compressedSize];
+	size_t nReadGot = pPak->FRead(pCompressed, 1, compressedSize, fp);
+	sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: %s after compressed FRead, got=%u\n", path, (unsigned)nReadGot);
+	if (nReadGot != (size_t)compressedSize)
+	{
+		sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: compressed data read failed for %s\n", path);
+		delete [] pCompressed;
+		pPak->FClose(fp);
+		return NULL;
+	}
+	pPak->FClose(fp);
+
+	sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: %s before block decompress loop, blocks=%dx%d\n", path, blockCountX, blockCountY);
+	byte *pRGBA = new byte[width * height * 4];
+	for (int by = 0; by < blockCountY; by++)
+	{
+		for (int bx = 0; bx < blockCountX; bx++)
+		{
+			const byte *pBlock = pCompressed + (long)(by * blockCountX + bx) * blockSize;
+			switch (fourCC)
+			{
+				case DDS_FOURCC_DXT1: DecompressBlockDXT1(bx*4, by*4, width, pBlock, pRGBA); break;
+				case DDS_FOURCC_DXT3: DecompressBlockDXT3(bx*4, by*4, width, pBlock, pRGBA); break;
+				case DDS_FOURCC_DXT5: DecompressBlockDXT5(bx*4, by*4, width, pBlock, pRGBA); break;
+			}
+		}
+	}
+	sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: %s after block decompress loop\n", path);
+	delete [] pCompressed;
+
+	*pOutW = width;
+	*pOutH = height;
+	return pRGBA;
+}
 #endif
 
 ITexPic			* CVitaRenderer::EF_LoadTexture(const char* nameTex, uint flags, uint flags2, byte eTT, float fAmount1, float fAmount2, int Id, int BindId)
@@ -504,14 +732,38 @@ ITexPic			* CVitaRenderer::EF_LoadTexture(const char* nameTex, uint flags, uint 
 	if (!nameTex || !iSystem || !iSystem->GetIPak())
 		return 0;
 
+	ICryPak *pPak = iSystem->GetIPak();
 	int w = 0, h = 0;
-	byte *pRGBA = LoadBMP_RGBA32(iSystem->GetIPak(), nameTex, &w, &h);
+	byte *pRGBA = NULL;
+
+	size_t nameLen = strlen(nameTex);
+	bool bIsBmp = nameLen >= 4 && stricmp(nameTex + nameLen - 4, ".bmp") == 0;
+	bool bIsDds = nameLen >= 4 && stricmp(nameTex + nameLen - 4, ".dds") == 0;
+
+	if (bIsBmp)
+		pRGBA = LoadBMP_RGBA32(pPak, nameTex, &w, &h);
+	else if (bIsDds)
+		pRGBA = LoadDDS_RGBA32(pPak, nameTex, &w, &h);
+	else
+	{
+		/* Vita: real Far Cry asset names are frequently the *source*
+		   extension (.tga) or bare, but the compiled data on disk is
+		   always .dds -- swap the extension and try that real file
+		   before giving up. */
+		char ddsPath[512];
+		size_t baseLen = nameLen;
+		const char *pDot = strrchr(nameTex, '.');
+		if (pDot) baseLen = pDot - nameTex;
+		if (baseLen > sizeof(ddsPath) - 5) baseLen = sizeof(ddsPath) - 5;
+		memcpy(ddsPath, nameTex, baseLen);
+		memcpy(ddsPath + baseLen, ".dds", 5);
+		pRGBA = LoadDDS_RGBA32(pPak, ddsPath, &w, &h);
+	}
+
 	if (!pRGBA)
 	{
-		/* Vita: only BMP is implemented so far -- real Far Cry game
-		   textures are DDS/DXT (see CryCommon/IShader.h's ETEX_Format),
-		   not yet supported. Honest failure, no fake pixels: no ITexPic
-		   is fabricated when the real file can't be decoded. */
+		/* Honest failure, no fake pixels: no ITexPic is fabricated when
+		   the real file can't be found or decoded. */
 		return 0;
 	}
 
