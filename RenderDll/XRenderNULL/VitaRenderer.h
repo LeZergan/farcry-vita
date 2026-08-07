@@ -250,6 +250,13 @@ private:
 	int m_nDepthBpp;
 	int m_nStencilBpp;
 	char m_cType;
+
+	// Backing store for GetDynVBPtr/DrawDynVB -- CFFont::DrawStringW (see
+	// CryFont/FFont.cpp) fills this via GetDynVBPtr and submits it via
+	// DrawDynVB(offset, pool, count); real vitaGL draw, not a stub.
+	static const int DYNVB_CAPACITY = 16384;
+	struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F m_DynVB[DYNVB_CAPACITY];
+	int m_nDynVBCursor;
 };
 
 #endif // VITA_RENDERER_H

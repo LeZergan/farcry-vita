@@ -412,12 +412,14 @@ _inline DWORD COLCONV (DWORD clr)
 
 void CFFont::DrawString( float fBaseX, float fBaseY, const char *szMsg, const bool bASCIIMultiLine )
 {
+	sceClibPrintf("[BOOTTRACE] CFFont::DrawString entered, this=%p szMsg=%p content=[%s]\n", (void*)this, (void*)szMsg, szMsg ? szMsg : "(null)");
 	if (!szMsg)
 	{
 		return;
 	}
 
 	int iSize = min(1023, strlen(szMsg));
+	sceClibPrintf("[BOOTTRACE] CFFont::DrawString: iSize=%d strlen=%d\n", iSize, (int)strlen(szMsg));
 
 	static wchar_t szwMsg[1024];
 
@@ -426,8 +428,10 @@ void CFFont::DrawString( float fBaseX, float fBaseY, const char *szMsg, const bo
 	{
 		szwMsg[iSize] = (unsigned char)szMsg[iSize];
 	}
+	sceClibPrintf("[BOOTTRACE] CFFont::DrawString: before DrawStringW\n");
 
 	DrawStringW(fBaseX, fBaseY, szwMsg, bASCIIMultiLine);
+	sceClibPrintf("[BOOTTRACE] CFFont::DrawString: after DrawStringW\n");
 }
 
 void CFFont::DrawStringW(float fBaseX, float fBaseY, const wchar_t *szMsg, const bool bASCIIMultiLine)
@@ -437,7 +441,9 @@ void CFFont::DrawStringW(float fBaseX, float fBaseY, const wchar_t *szMsg, const
 	// and will allocate two buffers
 	//assert(wcslen(szMsg) <= 682);
 
+	sceClibPrintf("[BOOTTRACE] CFFont::DrawStringW entered, this=%p m_pISystem=%p\n", (void*)this, (void*)m_pISystem);
 	IRenderer *pRenderer = m_pISystem->GetIRenderer();
+	sceClibPrintf("[BOOTTRACE] CFFont::DrawStringW: pRenderer=%p\n", (void*)pRenderer);
 	assert(pRenderer);
 
 	if (!szMsg)
@@ -445,9 +451,12 @@ void CFFont::DrawStringW(float fBaseX, float fBaseY, const wchar_t *szMsg, const
 		return;
 	}
 
+	sceClibPrintf("[BOOTTRACE] CFFont::DrawStringW: before Prepare\n");
 	Prepare(szMsg);
+	sceClibPrintf("[BOOTTRACE] CFFont::DrawStringW: after Prepare, m_pCurrentEffect=%p\n", (void*)m_pCurrentEffect);
 
 	float fTexHeight = m_pFontTexture.GetCellHeight() / (float)m_pFontTexture.GetHeight();
+	sceClibPrintf("[BOOTTRACE] CFFont::DrawStringW: fTexHeight=%f\n", fTexHeight);
 	bool	bRGB = (pRenderer->GetFeatures() & RFT_RGBA) != 0;
 	float fAlpha = m_pCurrentEffect->vPass[0].cColor.v[3];
 	struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F *pVertex = 0;
@@ -1090,7 +1099,19 @@ void CFFont::GetMemoryUsage (class ICrySizer* pSizer)
 void CFFont::Prepare(const wchar_t *szString)
 {
 	static int n = 0;
-	if (m_pFontTexture.PreCacheString(szString) == 1)
+	int nUpdated = 0;
+	int nResult = m_pFontTexture.PreCacheString(szString, &nUpdated);
+	/* Vita: was gated on `nResult == 1` (mirroring PreCacheString's
+	   "did new glyphs get cached" contract), but that path wasn't firing
+	   the GPU texture upload even when PreCacheString genuinely cached
+	   new glyphs (iUpdated>0) -- unconfirmed whether the bug is in this
+	   comparison or something upstream, and not worth more time chasing
+	   given a direct, always-correct fix is one line away: gate on the
+	   actual out-param (nUpdated) instead of trusting the return-value
+	   contract. Slightly less efficient (a redundant re-upload is
+	   possible if the two ever disagree) but never silently drops a
+	   real glyph-texture update again. */
+	if (nUpdated > 0 || nResult == 1)
 	{
 		m_pISystem->GetIRenderer()->FontUpdateTexture(m_iTextureID, 0, 0, m_pFontTexture.GetWidth(), m_pFontTexture.GetHeight(), (unsigned char *)m_pFontTexture.GetBuffer());
 	}

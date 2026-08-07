@@ -28,7 +28,7 @@ IPhysicalWorld *pIPhysicalWorld;
    exact bug fixed earlier this session (see git log). */
 
 CVitaRenderer::CVitaRenderer()
-	: m_nWidth(0), m_nHeight(0), m_nColorBpp(32), m_nDepthBpp(24), m_nStencilBpp(8), m_cType(0)
+	: m_nWidth(0), m_nHeight(0), m_nColorBpp(32), m_nDepthBpp(24), m_nStencilBpp(8), m_cType(0), m_nDynVBCursor(0)
 {
 	sceClibPrintf("[BOOTTRACE] CVitaRenderer ctor entered\n");
 	gcpVitaRenderer = this;
@@ -87,6 +87,7 @@ void CVitaRenderer::BeginFrame()
 	   IRenderer stub (see VitaRenderer.h). */
 	glClearColor(0.05f, 0.05f, 0.15f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
+
 #endif
 }
 
@@ -115,7 +116,7 @@ WIN_HWND CVitaRenderer::GetHWND() { return (WIN_HWND)this; }
 bool CVitaRenderer::SetCurrentContext(WIN_HWND hWnd) { return false; }
 bool CVitaRenderer::CreateContext(WIN_HWND hWnd, bool bAllowFSAA) { return false; }
 bool CVitaRenderer::DeleteContext(WIN_HWND hWnd) { return false; }
-int CVitaRenderer::GetFeatures() { return 0; }
+int CVitaRenderer::GetFeatures() { return RFT_RGBA; }
 int CVitaRenderer::GetMaxTextureMemory() { return 0; }
 int CVitaRenderer::EnumDisplayFormats(TArray<SDispFormat>& Formats, bool bReset) { return 0; }
 bool CVitaRenderer::ChangeResolution(int nNewWidth, int nNewHeight, int nNewColDepth, int nNewRefreshHZ, bool bFullScreen) { return false; }
@@ -127,8 +128,45 @@ void CVitaRenderer::SetViewport(int x, int y, int width, int height) { }
 void CVitaRenderer::SetScissor(int x, int y, int width, int height) { }
 void CVitaRenderer::MakeCurrent() { }
 void CVitaRenderer::DrawTriStrip(CVertexBuffer * src, int vert_num) { }
-void * CVitaRenderer::GetDynVBPtr(int nVerts, int & nOffs, int Pool) { return 0; }
-void CVitaRenderer::DrawDynVB(int nOffs, int Pool, int nVerts) { }
+void * CVitaRenderer::GetDynVBPtr(int nVerts, int & nOffs, int Pool)
+{
+	/* Vita: real backing store, see VitaRenderer.h. Wrap to the start
+	   instead of failing -- callers (CFFont) don't check for null and
+	   this is a small ring buffer refilled every frame, not persistent
+	   geometry, so a wrap just means an old, already-drawn string's
+	   vertices get overwritten before its next use. */
+	if (nVerts <= 0 || nVerts > DYNVB_CAPACITY)
+		return 0;
+	if (m_nDynVBCursor + nVerts > DYNVB_CAPACITY)
+		m_nDynVBCursor = 0;
+	nOffs = m_nDynVBCursor;
+	void *p = &m_DynVB[m_nDynVBCursor];
+	m_nDynVBCursor += nVerts;
+	return p;
+}
+
+void CVitaRenderer::DrawDynVB(int nOffs, int Pool, int nVerts)
+{
+#if defined(LINUX)
+	if (nOffs < 0 || nVerts <= 0 || nOffs + nVerts > DYNVB_CAPACITY)
+		return;
+	struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F *pV = &m_DynVB[nOffs];
+	sceClibPrintf("[BOOTTRACE] DrawDynVB: nOffs=%d nVerts=%d v0.xyz=(%f,%f,%f) v0.color=%08x v0.st=(%f,%f)\n",
+		nOffs, nVerts, pV->xyz.x, pV->xyz.y, pV->xyz.z, pV->color.dcolor, pV->st[0], pV->st[1]);
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glVertexPointer(3, GL_FLOAT, sizeof(struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F), &pV->xyz);
+	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F), &pV->color);
+	glTexCoordPointer(2, GL_FLOAT, sizeof(struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F), &pV->st);
+	glDrawArrays(GL_TRIANGLES, 0, nVerts);
+	sceClibPrintf("[BOOTTRACE] DrawDynVB: after glDrawArrays err=%d\n", glGetError());
+	glDisableClientState(GL_VERTEX_ARRAY);
+	glDisableClientState(GL_COLOR_ARRAY);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+#endif
+}
+
 void CVitaRenderer::DrawDynVB(struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F * pBuf, ushort * pInds, int nVerts, int nInds, int nPrimType) { }
 void CVitaRenderer::SetFenceCompleted(CVertexBuffer * buffer) { }
 CVertexBuffer	* CVitaRenderer::CreateBuffer(int vertexcount, int vertexformat, const char * szSource, bool bDynamic) { return 0; }
@@ -168,14 +206,108 @@ void CVitaRenderer::WriteDDS(byte * dat, int wdt, int hgt, int Size, const char 
 void CVitaRenderer::WriteTGA(byte * dat, int wdt, int hgt, const char * name, int bits) { }
 void CVitaRenderer::WriteJPG(byte * dat, int wdt, int hgt, char * name) { }
 bool CVitaRenderer::FontUploadTexture(class CFBitmap* a0, ETEX_Format eTF) { return false; }
-int CVitaRenderer::FontCreateTexture(int Width, int Height, byte * pData, ETEX_Format eTF) { return 0; }
-bool CVitaRenderer::FontUpdateTexture(int nTexId, int X, int Y, int USize, int VSize, byte * pData) { return false; }
+int CVitaRenderer::FontCreateTexture(int Width, int Height, byte * pData, ETEX_Format eTF)
+{
+#if defined(LINUX)
+	/* Vita: real texture upload. eTF_8888 (FONT_USE_32BIT_TEXTURE, the
+	   path CryFont/FFont.cpp::RenderInit actually takes) is a 32bpp
+	   buffer; eTF_8000 (unused here but handled defensively) is a
+	   single-channel glyph mask. See CryCommon/IShader.h ETEX_Format. */
+	sceClibPrintf("[BOOTTRACE] FontCreateTexture: Width=%d Height=%d pData=%p eTF=%d bytes=[%02x %02x %02x %02x %02x %02x %02x %02x]\n",
+		Width, Height, (void*)pData, (int)eTF,
+		pData?pData[0]:0, pData?pData[1]:0, pData?pData[2]:0, pData?pData[3]:0,
+		pData?pData[4]:0, pData?pData[5]:0, pData?pData[6]:0, pData?pData[7]:0);
+	GLuint tex = 0;
+	glGenTextures(1, &tex);
+	sceClibPrintf("[BOOTTRACE] FontCreateTexture: glGenTextures tex=%u err=%d\n", tex, glGetError());
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	if (eTF == eTF_8000)
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA, Width, Height, 0, GL_ALPHA, GL_UNSIGNED_BYTE, pData);
+	else
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pData);
+	sceClibPrintf("[BOOTTRACE] FontCreateTexture: after glTexImage2D err=%d\n", glGetError());
+	return (int)tex;
+#else
+	return 0;
+#endif
+}
+bool CVitaRenderer::FontUpdateTexture(int nTexId, int X, int Y, int USize, int VSize, byte * pData)
+{
+#if defined(LINUX)
+	sceClibPrintf("[BOOTTRACE] FontUpdateTexture entered, nTexId=%d USize=%d VSize=%d pData=%p bytes=[%02x %02x %02x %02x]\n",
+		nTexId, USize, VSize, (void*)pData, pData?pData[0]:0, pData?pData[1]:0, pData?pData[2]:0, pData?pData[3]:0);
+	if (pData) {
+		long total = (long)USize * VSize * 4;
+		long nonWhiteFF = 0, nonZeroAlpha = 0;
+		unsigned char minB = 255, maxB = 0;
+		for (long i = 0; i < total; i += 4) {
+			unsigned char a = pData[i+3];
+			if (a != 0) nonZeroAlpha++;
+			if (a < minB) minB = a;
+			if (a > maxB) maxB = a;
+		}
+		sceClibPrintf("[BOOTTRACE] FontUpdateTexture: buffer scan total=%ld nonZeroAlpha=%ld minAlpha=%d maxAlpha=%d\n",
+			total/4, nonZeroAlpha, (int)minB, (int)maxB);
+	}
+	glBindTexture(GL_TEXTURE_2D, (GLuint)nTexId);
+	glTexSubImage2D(GL_TEXTURE_2D, 0, X, Y, USize, VSize, GL_RGBA, GL_UNSIGNED_BYTE, pData);
+	sceClibPrintf("[BOOTTRACE] FontUpdateTexture: after glTexSubImage2D err=%d\n", glGetError());
+	return true;
+#else
+	return false;
+#endif
+}
 void CVitaRenderer::FontReleaseTexture(class CFBitmap * pBmp) { }
 void CVitaRenderer::FontSetTexture(class CFBitmap* a0, int nFilterMode) { }
-void CVitaRenderer::FontSetTexture(int nTexId, int nFilterMode) { }
-void CVitaRenderer::FontSetRenderingState(unsigned long nVirtualScreenWidth, unsigned long nVirtualScreenHeight) { }
-void CVitaRenderer::FontSetBlending(int src, int dst) { }
-void CVitaRenderer::FontRestoreRenderingState() { }
+void CVitaRenderer::FontSetTexture(int nTexId, int nFilterMode)
+{
+#if defined(LINUX)
+	sceClibPrintf("[BOOTTRACE] FontSetTexture: nTexId=%d\n", nTexId);
+	glEnable(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D, (GLuint)nTexId);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	sceClibPrintf("[BOOTTRACE] FontSetTexture: err=%d\n", glGetError());
+#endif
+}
+void CVitaRenderer::FontSetRenderingState(unsigned long nVirtualScreenWidth, unsigned long nVirtualScreenHeight)
+{
+#if defined(LINUX)
+	/* Vita: text is authored in top-left-origin pixel space (see
+	   CFFont::DrawStringW's fCharY += vSize.y on line breaks -- Y grows
+	   downward). glOrtho with bottom/top swapped gives that directly. */
+	glMatrixMode(GL_PROJECTION);
+	glPushMatrix();
+	glLoadIdentity();
+	glOrthof(0.0f, (float)m_nWidth, (float)m_nHeight, 0.0f, -1.0f, 1.0f);
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+	glLoadIdentity();
+	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+#endif
+}
+void CVitaRenderer::FontSetBlending(int src, int dst)
+{
+#if defined(LINUX)
+	/* Vita: src/dst are CryEngine's GS_BLSRC_x / GS_BLDST_x flags (see
+	   CryCommon/IRenderer.h); CFFont almost always passes the default
+	   src-alpha/one-minus-src-alpha pair already set by
+	   FontSetRenderingState above, so a full flag-to-GLenum mapping
+	   isn't needed for legible text yet -- left as a follow-up. */
+#endif
+}
+void CVitaRenderer::FontRestoreRenderingState()
+{
+#if defined(LINUX)
+	glMatrixMode(GL_PROJECTION);
+	glPopMatrix();
+	glMatrixMode(GL_MODELVIEW);
+	glPopMatrix();
+#endif
+}
 bool CVitaRenderer::EF_PrecacheResource(IShader * pSH, float fDist, float fTimeToReady, int Flags) { return false; }
 bool CVitaRenderer::EF_PrecacheResource(ITexPic * pTP, float fDist, float fTimeToReady, int Flags) { return false; }
 bool CVitaRenderer::EF_PrecacheResource(CLeafBuffer * pPB, float fDist, float fTimeToReady, int Flags) { return false; }
@@ -239,8 +371,8 @@ void CVitaRenderer::DrawLabelImage(const Vec3 & vPos, float fSize, int nTextureI
 void CVitaRenderer::DrawLabel(Vec3 pos, float font_size, const char * label_text, ...) { }
 void CVitaRenderer::DrawLabelEx(Vec3 pos, float font_size, float * pfColor, bool bFixedSize, bool bCenter, const char * label_text, ...) { }
 void CVitaRenderer::Draw2dLabel(float x, float y, float font_size, float * pfColor, bool bCenter, const char * label_text, ...) { }
-float CVitaRenderer::ScaleCoordX(float value) { return 0.0f; }
-float CVitaRenderer::ScaleCoordY(float value) { return 0.0f; }
+float CVitaRenderer::ScaleCoordX(float value) { return value; }
+float CVitaRenderer::ScaleCoordY(float value) { return value; }
 void CVitaRenderer::SetState(int State) { }
 void CVitaRenderer::SetCullMode(int mode) { }
 bool CVitaRenderer::EnableFog(bool enable) { return false; }

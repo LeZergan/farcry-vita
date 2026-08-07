@@ -1230,10 +1230,23 @@ void CSystem::OpenBasicPaks()
 	if (!szLanguage)
 	{
 		// if the language value cannot be found, let's default to the english pak
-		OpenLanguagePak("english"); 
+		OpenLanguagePak("english");
+#if defined(LINUX)
+		/* Vita: our stub script system can never answer g_language (see
+		   ScriptStubs.cpp), so we always fall through to this hardcoded
+		   "english" default -- but not every retail install is an
+		   English release. Real assets deployed for dev/testing on this
+		   machine turned out to be a Russian localization (only
+		   FCData/Localized/russian*.pak exist, not english*.pak), so the
+		   fonts/strings inside never actually mounted. OpenLanguagePak
+		   is a safe no-op if a given language's paks don't exist (each
+		   OpenPack call fails quietly), so trying "russian" too costs
+		   nothing when "english" alone was already correct. */
+		OpenLanguagePak("russian");
+#endif
 	}
 	else
-	{ 
+	{
 		OpenLanguagePak(szLanguage);
 	}
 	

@@ -298,26 +298,41 @@ typedef struct _SECURITY_ATTRIBUTES
 		return *pT;
 	}
 
+	/* Vita: these used to return `const S&` off a ternary whose branches
+	   are different types (S and T) -- when they differ (e.g. int vs the
+	   size_t strlen() returns), the ternary's overall expression is a
+	   *temporary* of their common type, and returning a reference to
+	   that temporary is a dangling reference the moment the function
+	   returns. Reading it back is undefined behavior -- empirically this
+	   was making CFFont::DrawString's `min(1023, strlen(szMsg))` read
+	   back as 0 on this target regardless of the real string length,
+	   silently drawing nothing. Fixed by returning by value (safe) and
+	   casting rT to S before comparing, matching the original apparent
+	   intent (result typed as S) without the dangling reference. This is
+	   called throughout the engine with mismatched-type arguments, so
+	   this fix has broad effect beyond just font rendering. */
 	template<typename S, typename T>
-	inline const S& min(const S& rS, const T& rT)
+	inline S min(const S& rS, const T& rT)
 	{
-		return (rS <= rT)? rS : rT;
+		S s2 = (S)rT;
+		return (rS <= s2) ? rS : s2;
 	}
 
 	template<typename S, typename T>
-	inline const S& max(const S& rS, const T& rT)
+	inline S max(const S& rS, const T& rT)
 	{
-		return (rS >= rT)? rS : rT;
+		S s2 = (S)rT;
+		return (rS >= s2) ? rS : s2;
 	}
 
 	template<typename S, typename T>
-	inline const S& __min(const S& rS, const T& rT)
+	inline S __min(const S& rS, const T& rT)
 	{
 		return min(rS, rT);
 	}
 
 	template<typename S, typename T>
-	inline const S& __max(const S& rS, const T& rT)
+	inline S __max(const S& rS, const T& rT)
 	{
 		return max(rS, rT);
 	}
