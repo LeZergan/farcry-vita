@@ -835,22 +835,29 @@ bool CSystem::InitScriptSystem()
 /////////////////////////////////////////////////////////////////////////////////
 bool CSystem::InitFileSystem()
 {
+	sceClibPrintf("[BOOTTRACE] InitFileSystem: before new CCryPak\n");
 	m_pIPak = new CCryPak(m_pLog,&m_PakVar);
+	sceClibPrintf("[BOOTTRACE] InitFileSystem: after new CCryPak\n");
 
 	if (m_bEditor)
 		m_pIPak->RecordFileOpen( true );
 
-	return(m_pIPak->Init(""));
+	sceClibPrintf("[BOOTTRACE] InitFileSystem: before m_pIPak->Init call\n");
+	bool r = m_pIPak->Init("");
+	sceClibPrintf("[BOOTTRACE] InitFileSystem: after m_pIPak->Init call, about to return\n");
+	return r;
 }
 
 //////////////////////////////////////////////////////////////////////////
 bool CSystem::InitStreamEngine()
 {
-	// to temporarily switch the whole streaming off
-	// streaming engine will be forced to single-threaded synchronous mode
-	//m_pStreamEngine = new CStreamEngine(m_pIPak, m_pLog, 0, false);
-
-	m_pStreamEngine = new CStreamEngine(m_pIPak, m_pLog);
+	// Vita: worker-thread-backed streaming triggers a pthread/dynarmic
+	// interaction crash on Vita3K (still under investigation -- isolated
+	// pthread_create, CreateEvent, and mutex lock/unlock all work fine on
+	// their own, so this is specific to the real IOWorkerThreadProc path).
+	// Crytek's own single-threaded synchronous fallback, already present
+	// here as a documented alternate mode, sidesteps it.
+	m_pStreamEngine = new CStreamEngine(m_pIPak, m_pLog, 0, false);
 	return true;
 }
 
@@ -1117,15 +1124,19 @@ bool CSystem::Init( const SSystemInitParams &params )
 
 	if (!params.pLog)
 	{
+		sceClibPrintf("[BOOTTRACE] before new CLog\n");
 		m_pLog = new CLog(this);
+		sceClibPrintf("[BOOTTRACE] after new CLog, before SetFileName\n");
 		if (CmdlineSink.m_sLogFile.size())
 			m_pLog->SetFileName(CmdlineSink.m_sLogFile.c_str());
 		else if (params.sLogFileName)
 			m_pLog->SetFileName(params.sLogFileName);
 		else
 			m_pLog->SetFileName(DEFAULT_LOG_FILENAME);
+		sceClibPrintf("[BOOTTRACE] after SetFileName, before LogVersion\n");
 
 		LogVersion();
+		sceClibPrintf("[BOOTTRACE] after LogVersion\n");
 	}
 	else
   {
@@ -1151,22 +1162,31 @@ bool CSystem::Init( const SSystemInitParams &params )
 	//////////////////////////////////////////////////////////////////////////
 	// CREATE CONSOLE
 	//////////////////////////////////////////////////////////////////////////
+	sceClibPrintf("[BOOTTRACE] before new CXConsole\n");
 	m_pConsole = new CXConsole;
+	sceClibPrintf("[BOOTTRACE] after new CXConsole\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// FILE SYSTEM
 	//////////////////////////////////////////////////////////////////////////
 
 #if !defined(PS2) && !defined (GC)
+	sceClibPrintf("[BOOTTRACE] before new CCpuFeatures\n");
   m_pCpu = new CCpuFeatures;
+	sceClibPrintf("[BOOTTRACE] before m_pCpu->Detect()\n");
   m_pCpu->Detect();
+	sceClibPrintf("[BOOTTRACE] after m_pCpu->Detect()\n");
 #endif
 
+	sceClibPrintf("[BOOTTRACE] before OS User name log\n");
 	CryLogAlways("OS User name: '%s'",GetUserName());
+	sceClibPrintf("[BOOTTRACE] after OS User name log\n");
 
 	CryLogAlways("File System Initialization");
+	sceClibPrintf("[BOOTTRACE] after File System Init log, before InitFileSystem()\n");
 
 	InitFileSystem();
+	sceClibPrintf("[BOOTTRACE] after InitFileSystem() call returns to caller\n");
 
 	if (CmdlineSink.m_sMod!="")
 	{
@@ -1189,8 +1209,11 @@ bool CSystem::Init( const SSystemInitParams &params )
 	else
 		memset(m_szGameMOD,0,MAX_PATH);
 
+	sceClibPrintf("[BOOTTRACE] after m_sMod handling, before Stream Engine log\n");
 	CryLogAlways("Stream Engine Initialization");
+	sceClibPrintf("[BOOTTRACE] after Stream Engine log, before InitStreamEngine()\n");
 	InitStreamEngine();
+	sceClibPrintf("[BOOTTRACE] after InitStreamEngine()\n");
 
 
 	//////////////////////////////////////////////////////////////////////////

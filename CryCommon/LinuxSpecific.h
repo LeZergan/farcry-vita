@@ -269,7 +269,17 @@ typedef struct _SECURITY_ATTRIBUTES
 } SECURITY_ATTRIBUTES, *PSECURITY_ATTRIBUTES, *LPSECURITY_ATTRIBUTES;
 
 #ifdef __cplusplus
-	static pthread_mutex_t mutex_t;
+	/* Was declared with no initializer, relying on zero-initialization to
+	   produce a valid mutex -- true for glibc's default mutex type (all-
+	   zero happens to be a valid initial state, which is why
+	   PTHREAD_MUTEX_INITIALIZER is defined as {0} there), but not
+	   guaranteed by POSIX and not true for vitasdk's pthread
+	   implementation. Locking/unlocking this never-initialized mutex is
+	   what was actually crashing (address ~0x4/0xC, inside
+	   pthread_mutex_unlock) the first time any code called
+	   InterlockedIncrement/Decrement (e.g. CMTSafeHeap::Alloc, smartptr.h's
+	   ref-counting) -- real fix is the standard static initializer. */
+	static pthread_mutex_t mutex_t = PTHREAD_MUTEX_INITIALIZER;
 	template<typename T>
 	const volatile T InterlockedIncrement(volatile T* pT)
 	{

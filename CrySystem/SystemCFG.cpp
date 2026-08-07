@@ -81,19 +81,26 @@ void CSystem::QueryVersionInfo()
 //////////////////////////////////////////////////////////////////////////
 void CSystem::LogVersion()
 {
+	sceClibPrintf("[BOOTTRACE] LogVersion: before time/localtime\n");
 	//! Get time.
 	time_t ltime;
 	time( &ltime );
 	tm *today = localtime( &ltime );
+	sceClibPrintf("[BOOTTRACE] LogVersion: after localtime, before strftime\n");
 
 	char s[1024];
 	//! Use strftime to build a customized time string.
 	//strftime( timebuf,128,"Logged at %A, %B %d,%Y\n\n", today );
 	strftime( s,128,"Log Started at %#c", today );
+	sceClibPrintf("[BOOTTRACE] LogVersion: after strftime, before CryLogAlways#1\n");
 	CryLogAlways( s );
+	sceClibPrintf("[BOOTTRACE] LogVersion: after CryLogAlways#1, before #2\n");
 	CryLogAlways( "FileVersion: %d.%d.%d.%d",m_fileVersion.v[3],m_fileVersion.v[2],m_fileVersion.v[1],m_fileVersion.v[0] );
+	sceClibPrintf("[BOOTTRACE] LogVersion: after CryLogAlways#2, before #3\n");
 	CryLogAlways( "ProductVersion: %d.%d.%d.%d",m_productVersion.v[3],m_productVersion.v[2],m_productVersion.v[1],m_productVersion.v[0] );
+	sceClibPrintf("[BOOTTRACE] LogVersion: after CryLogAlways#3, before #4\n");
 	CryLogAlways( "" );
+	sceClibPrintf("[BOOTTRACE] LogVersion: after CryLogAlways#4 (done)\n");
 }
 
 //////////////////////////////////////////////////////////////////////////

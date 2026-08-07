@@ -1,6 +1,7 @@
 #ifndef XML_STRING
 #define XML_STRING
 
+#include <TString.h>
 typedef String xml_string;
 /*
 #include <malloc.h>

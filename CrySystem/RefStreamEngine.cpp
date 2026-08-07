@@ -33,27 +33,38 @@ CRefStreamEngine::CRefStreamEngine (CCryPak* pPak, IMiniLog* pLog, unsigned useW
 	m_bEnableOverlapped (bOverlappedIO),
 	m_nSuspendCallbackTimeQuota(0)
 {
+	sceClibPrintf("[BOOTTRACE] CRefStreamEngine ctor body entered\n");
 	m_dwMainThreadId = GetCurrentThreadId();
+	sceClibPrintf("[BOOTTRACE] after GetCurrentThreadId, before CheckOSCaps\n");
 	CheckOSCaps();
+	sceClibPrintf("[BOOTTRACE] after CheckOSCaps, before QueryPerformanceFrequency\n");
 
 	if (!QueryPerformanceFrequency((LARGE_INTEGER*)&m_nPerfFreq))
 	{
 		m_nPerfFreq = 0;
 		m_nSuspendCallbackTimeQuota = 1; // suspend forever
 	}
+	sceClibPrintf("[BOOTTRACE] after QueryPerformanceFrequency, before SetCallbackTimeQuota\n");
 
 	//m_nSuspendCallbackTimeQuota = 1; // suspend anyway: we don't support this..
 	m_nCallbackTimeQuota = 0;
 	SetCallbackTimeQuota (50000);
 	m_dwMask=0;
+	sceClibPrintf("[BOOTTRACE] after SetCallbackTimeQuota, before CreateEvent x3\n");
 
 	m_hIOJob = CreateEvent (NULL, FALSE, FALSE, NULL);
+	sceClibPrintf("[BOOTTRACE] after CreateEvent #1 (m_hIOJob)\n");
 	m_hIOExecuted = CreateEvent (NULL, TRUE, FALSE, NULL);
+	sceClibPrintf("[BOOTTRACE] after CreateEvent #2 (m_hIOExecuted)\n");
 	m_hDummyEvent = CreateEvent (NULL, FALSE, FALSE, NULL);
+	sceClibPrintf("[BOOTTRACE] after CreateEvent #3 (m_hDummyEvent)\n");
+	sceClibPrintf("[BOOTTRACE] after CreateEvent x3, before memset\n");
 	memset (m_nSectorSizes, 0, sizeof(m_nSectorSizes));
+	sceClibPrintf("[BOOTTRACE] after memset, before useWorkerThreads check\n");
 
 	if (useWorkerThreads)
 		StartWorkerThread();
+	sceClibPrintf("[BOOTTRACE] CRefStreamEngine ctor body complete\n");
 }
 
 //////////////////////////////////////////////////////////////////////////

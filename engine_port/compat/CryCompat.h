@@ -14,20 +14,35 @@
 #include <strings.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <cstdio>
-#include <cstring>
-#include <cstdlib>
-#include <ctime>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+#include <stdint.h>
+#ifdef __cplusplus
 #include <string>
 #include <algorithm> /* DefenceWall.cpp uses std::replace without including this itself */
 #include <unordered_map>
 namespace std { template<class K, class V> using hash_map = unordered_map<K, V>; }
-#include <stdint.h>
+
+/* Everything below is the Win32/CryPak emulation layer, needed only by
+   the real (always C++) engine sources -- generic C libraries pulled
+   into this build (Lua, md5, Expat) are force-included this same header
+   but don't call any of it, and several of its constructs (bare struct
+   names as types, std::string, new/delete) aren't valid C anyway. */
 
 /* ---- Critical section, backed by a recursive pthread mutex ---- */
 struct CRITICAL_SECTION { pthread_mutex_t m; };
 
+#ifdef CRYCOMPAT_TRACE_CRITSEC
+#include <psp2/kernel/clib.h>
+#define CRYCOMPAT_TRACE(...) do { sceClibPrintf(__VA_ARGS__); } while (0)
+#else
+#define CRYCOMPAT_TRACE(...) do {} while (0)
+#endif
+
 inline void InitializeCriticalSection(CRITICAL_SECTION *cs) {
+	CRYCOMPAT_TRACE("[CRITSEC] Init cs=%p\n", (void*)cs);
 	pthread_mutexattr_t attr;
 	pthread_mutexattr_init(&attr);
 	pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
@@ -35,8 +50,14 @@ inline void InitializeCriticalSection(CRITICAL_SECTION *cs) {
 	pthread_mutexattr_destroy(&attr);
 }
 inline void DeleteCriticalSection(CRITICAL_SECTION *cs) { pthread_mutex_destroy(&cs->m); }
-inline void EnterCriticalSection(CRITICAL_SECTION *cs)  { pthread_mutex_lock(&cs->m); }
-inline void LeaveCriticalSection(CRITICAL_SECTION *cs)  { pthread_mutex_unlock(&cs->m); }
+inline void EnterCriticalSection(CRITICAL_SECTION *cs)  {
+	CRYCOMPAT_TRACE("[CRITSEC] Enter cs=%p\n", (void*)cs);
+	pthread_mutex_lock(&cs->m);
+}
+inline void LeaveCriticalSection(CRITICAL_SECTION *cs)  {
+	CRYCOMPAT_TRACE("[CRITSEC] Leave cs=%p\n", (void*)cs);
+	pthread_mutex_unlock(&cs->m);
+}
 
 /* ---- FILETIME: must stay a plain 8-byte, two-DWORD layout -- CryPak.cpp
    reinterpret-casts a 64-bit tick count directly onto this struct. ---- */
@@ -444,3 +465,5 @@ inline void replaceDoublePathFilename(char *path) {
 	}
 	*dst = 0;
 }
+
+#endif /* __cplusplus */
