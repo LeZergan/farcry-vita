@@ -61,7 +61,18 @@
 
 	static const char* GetModulePath()
 	{
-		return getenv(gEnvName);
+		/* Vita: MODULE_PATH is never set on this port (no SetModulePath
+		   call anywhere in the boot sequence -- there's nothing to point
+		   it at, no .so ever gets built for this static-link target).
+		   getenv() returning NULL here used to flow straight into
+		   `string newLibName(GetModulePath())` below, constructing a
+		   std::string from a null pointer -- undefined behavior that
+		   libstdc++ turns into an uncaught std::logic_error, std::terminate,
+		   and an abort() that crashes the whole Vita3K emulator rather
+		   than just this guest process. Every LoadDLL() call not already
+		   bypassed with a direct factory-function call hit this. */
+		const char* p = getenv(gEnvName);
+		return p ? p : "";
 	}
 
 	static void SetModulePath(const char* pModulePath)

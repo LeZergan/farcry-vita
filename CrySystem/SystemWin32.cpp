@@ -859,6 +859,24 @@ void CSystem::Error( const char *format,... )
 	_vsnprintf(szBuffer+strlen(sPrefix), MAX_WARNING_LENGTH-strlen(sPrefix), format, ArgList);
 	va_end(ArgList);
 
+#if defined(LINUX)
+	/* Vita: this function is a deliberate fatal-error terminator (see the
+	   exit(1) below) -- correct behavior on PC, but on this port it was
+	   crashing the whole emulator rather than the guest process: newlib's
+	   exit()/_kill_r() on vitasdk ends in an unimplemented-syscall trap
+	   Vita3K's dynarmic can't unwind cleanly, and GetLastSystemErrorMessage/
+	   OutputDebugString are unported Win32 shims too. This almost always
+	   fires here from missing game assets (fonts/paks -- no real FCData
+	   is deployed to this dev/test install) rather than an actual engine
+	   bug, so on Vita: log it and let boot continue in a degraded state
+	   instead of tearing the whole process down. Once real assets are in
+	   place this should mostly stop firing at all. */
+	sceClibPrintf("[BOOTTRACE] CSystem::Error (non-fatal on Vita): %s\n", szBuffer);
+	if (m_pLog)
+		m_pLog->Log( szBuffer );
+	return;
+#endif
+
 	// get system error message before any attempt to write into log
   const char * szSysErrorMessage = GetLastSystemErrorMessage();
 

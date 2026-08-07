@@ -786,23 +786,31 @@ int CSystem::AutoDetectRenderer(char *Vendor, char *Device)
 /////////////////////////////////////////////////////////////////////////////////
 void CSystem::CreateRendererVars()
 {
+	sceClibPrintf("[BOOTTRACE] CreateRendererVars entered\n");
 	// load renderer settings from engine.ini
 	//m_rWidth = GetIConsole()->CreateVariable("r_Width", "800", VF_DUMPTODISK);
 	//m_rHeight = GetIConsole()->CreateVariable("r_Height", "600", VF_DUMPTODISK);
+	sceClibPrintf("[BOOTTRACE] CreateRendererVars: before r_Width\n");
 	m_rWidth = GetIConsole()->CreateVariable("r_Width", "1024", VF_DUMPTODISK,
 		"Sets the display width, in pixels. Default is 1024.\n"
 		"Usage: r_Width [800/1024]");
+	sceClibPrintf("[BOOTTRACE] CreateRendererVars: before r_Height\n");
 	m_rHeight = GetIConsole()->CreateVariable("r_Height", "768", VF_DUMPTODISK,
 		"Sets the display height, in pixels. Default is 768.\n"
 		"Usage: r_Height [600/768]");
+	sceClibPrintf("[BOOTTRACE] CreateRendererVars: before r_ColorBits\n");
 	m_rColorBits = GetIConsole()->CreateVariable("r_ColorBits", "32", VF_DUMPTODISK,
 		"Sets the color resolution, in bits per pixel. Default is 32.\n"
 		"Usage: r_ColorBits [32/24/16/8]");
+	sceClibPrintf("[BOOTTRACE] CreateRendererVars: before r_DepthBits\n");
 	m_rDepthBits = GetIConsole()->CreateVariable("r_DepthBits", "32", VF_DUMPTODISK);
-	m_rStencilBits = GetIConsole()->CreateVariable("r_StencilBits", "8", VF_DUMPTODISK);	
+	sceClibPrintf("[BOOTTRACE] CreateRendererVars: before r_StencilBits\n");
+	m_rStencilBits = GetIConsole()->CreateVariable("r_StencilBits", "8", VF_DUMPTODISK);
+	sceClibPrintf("[BOOTTRACE] CreateRendererVars: before r_Driver\n");
 	m_rDriver= GetIConsole()->CreateVariable("r_Driver", "Direct3D9", VF_DUMPTODISK,
 		"Sets the renderer driver. Default is 'Direct3D9'.\n"
 		"Usage: r_Driver Direct3D9");
+	sceClibPrintf("[BOOTTRACE] CreateRendererVars: after r_Driver\n");
 #ifdef _DEBUG
 	m_rFullscreen = GetIConsole()->CreateVariable("r_Fullscreen", "0", VF_DUMPTODISK,
 		"Toggles fullscreen mode. Default is 1 (fullscreen).\n"
@@ -822,6 +830,7 @@ void CSystem::CreateRendererVars()
 		"Usage: r_DisplayInfo [0/1]\n"
 		"In debug mode, the information is automatically displayed.");
 #endif
+	sceClibPrintf("[BOOTTRACE] CreateRendererVars: done\n");
 }
 
 //////////////////////////////////////////////////////////////////////

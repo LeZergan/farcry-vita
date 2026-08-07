@@ -329,7 +329,9 @@ public:
 ///////////////////////////////////////////////
 bool CFFont::Load(const char *szFile)
 {
+	sceClibPrintf("[BOOTTRACE] CFFont::Load entered, szFile=%s\n", szFile ? szFile : "(null)");
 	ICryPak *pPak = GetISystem()->GetIPak();
+	sceClibPrintf("[BOOTTRACE] CFFont::Load: pPak=%p\n", (void*)pPak);
 
 	if (!pPak)
 	{
@@ -337,6 +339,7 @@ bool CFFont::Load(const char *szFile)
 	}
 
 	FILE *fp = pPak->FOpen(szFile, "rb");
+	sceClibPrintf("[BOOTTRACE] CFFont::Load: after FOpen, fp=%p\n", (void*)fp);
 	if(!fp)
 		return false;
 

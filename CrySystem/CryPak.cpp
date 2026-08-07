@@ -1060,8 +1060,10 @@ bool CCryPak::OpenPacks(const char* szBindRoot, const char *pWildcardIn, unsigne
 
 bool CCryPak::OpenPacksCommon(const char* szDir, char *cWork, unsigned nFlags)
 {
+	sceClibPrintf("[BOOTTRACE] OpenPacksCommon entered, cWork=%s\n", cWork ? cWork : "(null)");
 	__finddata64_t fd;
 	intptr_t h = _findfirst64 (cWork, &fd);
+	sceClibPrintf("[BOOTTRACE] OpenPacksCommon: after _findfirst64, h=%d\n", (int)h);
 
 	// where to copy the filenames to form the path in cWork
 	char* pDestName = strrchr (cWork, g_cNativeSlash);
@@ -1076,24 +1078,31 @@ bool CCryPak::OpenPacksCommon(const char* szDir, char *cWork, unsigned nFlags)
 	if (h != -1)
 	{
 		std::vector<string> files;
+		int nScan = 0;
 		do {
+			nScan++;
 			strcpy (pDestName, fd.name);
 			std::string sfile = strlwr(cWork);
 			files.push_back(strlwr(cWork));
 		}
 		while(0 == _findnext64 (h, &fd));
+		sceClibPrintf("[BOOTTRACE] OpenPacksCommon: scan loop done, nScan=%d files=%d\n", nScan, (int)files.size());
 
 		// Open files in alphabet order.
 		std::sort( files.begin(),files.end() );
 		for (int i = 0; i < files.size(); i++)
 		{
+			sceClibPrintf("[BOOTTRACE] OpenPacksCommon: before OpenPackCommon[%d]=%s\n", i, files[i].c_str());
 			OpenPackCommon(szDir, files[i].c_str(), nFlags);
+			sceClibPrintf("[BOOTTRACE] OpenPacksCommon: after OpenPackCommon[%d]\n", i);
 		}
 
 		_findclose (h);
+		sceClibPrintf("[BOOTTRACE] OpenPacksCommon: returning true\n");
 		return true;
 	}
 
+	sceClibPrintf("[BOOTTRACE] OpenPacksCommon: returning false (h==-1)\n");
 	return false;
 }
 

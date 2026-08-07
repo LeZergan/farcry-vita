@@ -288,14 +288,23 @@ WIN_HMODULE CSystem::LoadDLL( const char *dllName,bool bQuitIfNotFound)
 { 
 	WIN_HMODULE handle = CryLoadLibrary( dllName ); 
 
-	if (!handle)      
+	if (!handle)
 	{
 #if defined(LINUX)
-		printf ("Error loading DLL: %s, error :  %s\n", dllName, dlerror());
+		/* Vita: plain printf() here was never actually the crash's own
+		   fault -- see the sceClibPrintf note in engine_port/compat/
+		   README.md, printf() output is invisible on Vita3K, but was
+		   suspected to be crashing on an unset stdout on this bare-metal
+		   homebrew target with no real console. Switched to the proven
+		   sceClibPrintf tracer used everywhere else this session, and
+		   made the bQuitIfNotFound=true fallthrough explicit -- it always
+		   returned NULL from here anyway (Quit() itself is a harmless
+		   flag-set, not a real process-terminator, unlike Error()'s
+		   exit(1) fixed earlier), just implicitly rather than clearly. */
+		sceClibPrintf("[BOOTTRACE] LoadDLL: %s not found (expected -- no .so ever built for Vita)\n", dllName);
 		if (bQuitIfNotFound)
 			Quit();
-		else
-			return 0;
+		return 0;
 #else
 		if (bQuitIfNotFound)
 		{		
@@ -1230,8 +1239,11 @@ void CSystem::OpenBasicPaks()
 	
 	string paksFolder = string(DATA_FOLDER)+"/*.pak";
 	// Open all *.pak files in root folder.
+	sceClibPrintf("[BOOTTRACE] OpenBasicPaks: before OpenPacks(*.pak)\n");
 	m_pIPak->OpenPacks( "*.pak" );
+	sceClibPrintf("[BOOTTRACE] OpenBasicPaks: before OpenPacks(paksFolder=%s)\n", paksFolder.c_str());
 	m_pIPak->OpenPacks( "",paksFolder.c_str() );
+	sceClibPrintf("[BOOTTRACE] OpenBasicPaks: done\n");
 }
 
 //////////////////////////////////////////////////////////////////////////

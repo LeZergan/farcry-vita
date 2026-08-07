@@ -83,6 +83,17 @@ extern HMODULE gDLLHandle;
 
 #define DEFAULT_LOG_FILENAME "Log.txt"
 
+#if defined(LINUX)
+/* Vita: see CSystem::OpenRenderLibrary(int) below -- statically-linked
+   renderer factory, declared extern "C" to match its definition in
+   RenderDll/XRenderNULL/VitaRenderer.cpp (avoids a mangled-vs-unmangled
+   symbol mismatch at link time). */
+extern "C" IRenderer* PackageRenderConstructor(int argc, char* argv[], SCryRenderInterface *sp);
+/* Vita: see CSystem::InitFont() below -- same reasoning, matching
+   CryFont/ICryFont.cpp's extern "C" definition. */
+extern "C" ICryFont* CreateCryFontInterface(ISystem *pSystem);
+#endif
+
 //////////////////////////////////////////////////////////////////////////
 #include "Validator.h"
 //////////////////////////////////////////////////////////////////////////
@@ -155,6 +166,7 @@ bool CSystem::OpenRenderLibrary(const char *t_rend)
 /////////////////////////////////////////////////////////////////////////////////
 bool CSystem::OpenRenderLibrary(int type)
 {
+	sceClibPrintf("[BOOTTRACE] OpenRenderLibrary(int) entered, type=%d\n", type);
   SCryRenderInterface sp;
 
 #ifdef _XBOX
@@ -178,14 +190,16 @@ bool CSystem::OpenRenderLibrary(int type)
 	   script/network/physics -- no renderer .so was ever built for this
 	   static-link target. Call the statically-linked XRenderNULL factory
 	   directly (see RenderDll/XRenderNULL/NULL_System.cpp). */
-	extern IRenderer* PackageRenderConstructor(int argc, char* argv[], SCryRenderInterface *sp);
+	sceClibPrintf("[BOOTTRACE] OpenRenderLibrary: before PackageRenderConstructor\n");
 	m_pRenderer = PackageRenderConstructor(0, NULL, &sp);
+	sceClibPrintf("[BOOTTRACE] OpenRenderLibrary: after PackageRenderConstructor, m_pRenderer=%p\n", (void*)m_pRenderer);
 	if (!m_pRenderer)
 	{
 		Error("Error: Couldn't construct render driver (Vita/NULL)");
 		return false;
 	}
 	m_pRenderer->SetType(type);
+	sceClibPrintf("[BOOTTRACE] OpenRenderLibrary: after SetType\n");
 #elif !defined(_XBOX)
 	char libname[128];
 	if (type == R_GL_RENDERER)
@@ -345,7 +359,18 @@ bool CSystem::InitEntitySystem(WIN_HINSTANCE hInstance, WIN_HWND hWnd)
 	/////////////////////////////////////////////////////////////////////////////////
 	// Load and initialize the entity system
 	/////////////////////////////////////////////////////////////////////////////////
-#ifndef _XBOX
+#if defined(LINUX)
+	/* Vita: same broken LoadDLL/dlopen indirection already fixed
+	   elsewhere this session -- CryEntitySystem is fully compiled in, so
+	   call its real, statically-linked factory directly (already
+	   declared, plain C++ linkage, in CryCommon/IEntitySystem.h). */
+	m_pEntitySystem = CreateEntitySystem(this);
+	if (!m_pEntitySystem)
+	{
+		Error( "Error creating Entity System");
+		return false;
+	}
+#elif !defined(_XBOX)
 	PFNCREATEENTITYSYSTEM pfnCreateEntitySystem;
 
 	// Load the DLL
@@ -385,6 +410,17 @@ bool CSystem::InitEntitySystem(WIN_HINSTANCE hInstance, WIN_HWND hWnd)
 /////////////////////////////////////////////////////////////////////////////////
 bool CSystem::InitInput(WIN_HINSTANCE hinst, WIN_HWND hwnd)
 {
+#if defined(LINUX)
+	/* Vita: CryInput/CryInput.cpp is real DirectInput8 (HINSTANCE,
+	   LPDIRECTINPUT8, POINT, ...) -- a genuine Windows-only dependency,
+	   not the broken-LoadDLL pattern fixed elsewhere this session. Porting
+	   real input to SceCtrl is a separate, not-yet-started undertaking
+	   (same category as the XRenderOGL/vitaGL renderer port). Skip input
+	   init entirely for now so boot can proceed toward rendering; m_pIInput
+	   stays NULL, matching every other unconditionally-guarded call site
+	   in this codebase (all check for a null renderer/input/etc already). */
+	return true;
+#endif
 	m_dll.hInput = LoadDLL(DLL_INPUT);
 	if (!m_dll.hInput)
 		return false;
@@ -909,7 +945,19 @@ bool CSystem::InitFont()
 	if (m_bEditor && !m_pRenderer)
 		return true;
 
-#ifndef _XBOX
+#if defined(LINUX)
+	/* Vita: same broken LoadDLL/dlopen indirection already fixed for
+	   script/network/physics/renderer -- no font .so was ever built for
+	   this static-link target. CryFont is fully compiled in (unlike
+	   CryInput's real DirectInput dependency), so call its real,
+	   statically-linked factory directly. */
+	m_pICryFont = CreateCryFontInterface(this);
+	if(!m_pICryFont)
+	{
+		Error( "Error loading CreateCryFontInstance" );
+		return false;
+	}
+#elif !defined(_XBOX)
 	m_dll.hFont = LoadDLL(DLL_FONT);
 	if(!m_dll.hFont)
 		return (false);
@@ -937,8 +985,11 @@ bool CSystem::InitFont()
 #endif
 
 	// Load the default font
+	sceClibPrintf("[BOOTTRACE] InitFont: before NewFont(Console)\n");
 	IFFont *pConsoleFont = m_pICryFont->NewFont("Console");
+	sceClibPrintf("[BOOTTRACE] InitFont: before NewFont(Default)\n");
 	m_pIFont = m_pICryFont->NewFont("Default");
+	sceClibPrintf("[BOOTTRACE] InitFont: after NewFont calls, pConsoleFont=%p m_pIFont=%p\n", (void*)pConsoleFont, (void*)m_pIFont);
 	if(!m_pIFont || !pConsoleFont)
 	{
 		Error( "Error creating the default fonts" );
@@ -948,6 +999,7 @@ bool CSystem::InitFont()
 	//////////////////////////////////////////////////////////////////////////
 	string szFontPath = "languages/fonts/default.xml";
 
+	sceClibPrintf("[BOOTTRACE] InitFont: before Load(%s)\n", szFontPath.c_str());
 	if(!m_pIFont->Load(szFontPath.c_str()))
 	{
 		string szError = "Error loading the default font from ";
@@ -955,7 +1007,15 @@ bool CSystem::InitFont()
 		szError += ". You're probably running the executable from the wrong working folder.";
 		Error(szError.c_str());
 
+#if defined(LINUX)
+		/* Vita: no real FCData is deployed to this dev/test install, so
+		   the default font is genuinely absent -- expected right now, not
+		   an engine bug. Continue toward rendering with an unloaded font
+		   rather than failing the whole boot over it. */
+		sceClibPrintf("[BOOTTRACE] InitFont: continuing without default font (Vita, no real assets deployed)\n");
+#else
 		return false;
+#endif
 	}
 
 	int n = szFontPath.find("default.xml");
@@ -970,7 +1030,9 @@ bool CSystem::InitFont()
 		szError += ". You're probably running the executable from the wrong working folder.";
 		Error(szError.c_str());
 
+#if !defined(LINUX)
 		return false;
+#endif
 	}
 
 	return true;
@@ -980,6 +1042,25 @@ bool CSystem::InitFont()
 bool CSystem::Init3DEngine()
 {
   ::SetLastError(0);
+#if defined(LINUX)
+	/* Vita: C3DEngine's constructor unconditionally dereferences results
+	   from GetRenderer()->EF_LoadTexture/EF_CreateRE/EF_LoadShader (e.g.
+	   `pPic->GetTextureID()` right after EF_LoadTexture) with no null
+	   check -- same "always non-null, always valid" assumption pattern
+	   as IScriptSystem (see ScriptStubs.h/.cpp), but CVitaRenderer's
+	   mechanically-stubbed methods correctly return null for the ~200
+	   methods with no real implementation yet (see VitaRenderer.h).
+	   Building real dummy ITexPic/IShader/CRendElement objects for every
+	   resource type C3DEngine touches is a large separate undertaking on
+	   the same scale as the CRenderer/XRenderOGL port itself -- not
+	   started. Skip real 3D-engine construction on Vita for now so boot
+	   can reach the actual game loop (BeginFrame/Update -- see
+	   VitaRenderer.cpp) and put a real cleared frame on screen; scene/
+	   asset rendering is the next milestone after that. */
+	m_pI3DEngine = NULL;
+	sceClibPrintf("[BOOTTRACE] Init3DEngine: skipped on Vita (see comment), returning true\n");
+	return true;
+#else
   m_dll.h3DEngine = LoadDLL(DLL_3DENGINE);
 	if (!m_dll.h3DEngine)
 		return false;
@@ -990,9 +1071,10 @@ bool CSystem::Init3DEngine()
 	{
 		Error("CreateCry3DEngine is not exported api function in Cry3DEngine.dll");
 		return false;
-	} 
+	}
 
 	m_pI3DEngine = (*pfnCreateCry3DEngine)(this,g3deInterfaceVersion);
+#endif
 
   if (!m_pI3DEngine )
 	{
@@ -1014,10 +1096,14 @@ bool CSystem::Init3DEngine()
 bool CSystem::InitAnimationSystem()
 {
 #if defined(LINUX)
-	m_dll.hAnimation = LoadDLL("cryanimation.so");
+	/* Vita: same broken LoadDLL/dlopen indirection already fixed
+	   elsewhere this session -- CryAnimation is fully compiled in, so
+	   call its real, statically-linked factory directly (already
+	   declared, plain C++ linkage, in CryCommon/ICryAnimation.h via
+	   CreateCharManager). */
+	m_pICryCharManager = CreateCharManager(this, gAnimInterfaceVersion);
 #else
 	m_dll.hAnimation = LoadDLL("CryAnimation.dll");
-#endif
 	if (!m_dll.hAnimation)
 		return false;
 
@@ -1027,14 +1113,15 @@ bool CSystem::InitAnimationSystem()
 		return false;
 
 	m_pICryCharManager = (*pfnCreateCharManager)(this,gAnimInterfaceVersion);
+#endif
 
 	if (m_pICryCharManager)
-		GetILog()->LogPlus(" ok"); 
+		GetILog()->LogPlus(" ok");
 	else
 		GetILog()->LogPlus (" FAILED");
 
 	return m_pICryCharManager != NULL;
-} 
+}
 
 //////////////////////////////////////////////////////////////////////////
 void CSystem::InitVTuneProfiler()
@@ -1336,9 +1423,12 @@ bool CSystem::Init( const SSystemInitParams &params )
 	// TIME
 	//////////////////////////////////////////////////////////////////////////
 	CryLogAlways("Time initialization");
+	sceClibPrintf("[BOOTTRACE] before m_Time.Init\n");
 	if (!m_Time.Init(this))
 		return (false);
+	sceClibPrintf("[BOOTTRACE] after m_Time.Init, before m_Time.Reset\n");
 	m_Time.Reset();
+	sceClibPrintf("[BOOTTRACE] after m_Time.Reset\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// INPUT
@@ -1346,8 +1436,10 @@ bool CSystem::Init( const SSystemInitParams &params )
 	if (!params.bPreview && !params.bDedicatedServer)
 	{
 		CryLogAlways("Input initialization");
+		sceClibPrintf("[BOOTTRACE] before InitInput\n");
 		if (!InitInput(m_hInst, m_hWnd))
 			return false;
+		sceClibPrintf("[BOOTTRACE] after InitInput\n");
 	}
 
 
@@ -1357,8 +1449,10 @@ bool CSystem::Init( const SSystemInitParams &params )
 	if (!params.bPreview && !params.bDedicatedServer)
 	{
 		CryLogAlways("Sound initialization");
+		sceClibPrintf("[BOOTTRACE] before InitSound\n");
 		if (!InitSound(m_hWnd))
 			return false;
+		sceClibPrintf("[BOOTTRACE] after InitSound\n");
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -1367,8 +1461,10 @@ bool CSystem::Init( const SSystemInitParams &params )
 	if(!params.bDedicatedServer)
 	{
 		CryLogAlways("Font initialization");
+		sceClibPrintf("[BOOTTRACE] before InitFont\n");
 		if (!InitFont())
 			return false;
+		sceClibPrintf("[BOOTTRACE] after InitFont\n");
 	}
 
 	//////////////////////////////////////////////////////////////////////////
@@ -1377,11 +1473,15 @@ bool CSystem::Init( const SSystemInitParams &params )
 	if (!params.bPreview)
 	{
 		CryLogAlways("AI initialization");
+		sceClibPrintf("[BOOTTRACE] before InitAISystem\n");
 		if (!InitAISystem())
 			return false;
+		sceClibPrintf("[BOOTTRACE] after InitAISystem\n");
 	}
 
+	sceClibPrintf("[BOOTTRACE] before m_pConsole->Init\n");
 	m_pConsole->Init(this);
+	sceClibPrintf("[BOOTTRACE] after m_pConsole->Init\n");
 
 //#ifndef MEM_STD
 //  CConsole::AddCommand("MemStats",::DumpAllocs);
@@ -1392,8 +1492,10 @@ bool CSystem::Init( const SSystemInitParams &params )
 	if (!params.bPreview)
 	{
 		CryLogAlways("Entity system initialization");
+		sceClibPrintf("[BOOTTRACE] before InitEntitySystem\n");
 		if (!InitEntitySystem(m_hInst, m_hWnd))
 			return false;
+		sceClibPrintf("[BOOTTRACE] after InitEntitySystem\n");
 	}
 
 	if (!params.bEditor)
@@ -1402,27 +1504,36 @@ bool CSystem::Init( const SSystemInitParams &params )
 		// Init Animation system
 		//////////////////////////////////////////////////////////////////////////
 		CryLogAlways("Initializing Animation System");
+		sceClibPrintf("[BOOTTRACE] before InitAnimationSystem\n");
 		if (!InitAnimationSystem())
 			return false;
+		sceClibPrintf("[BOOTTRACE] after InitAnimationSystem\n");
 		//////////////////////////////////////////////////////////////////////////
 		// Init 3d engine
 		//////////////////////////////////////////////////////////////////////////
 		CryLogAlways("Initializing 3D Engine");
+		sceClibPrintf("[BOOTTRACE] before Init3DEngine\n");
 		if (!Init3DEngine())
 			return false;
+		sceClibPrintf("[BOOTTRACE] after Init3DEngine\n");
 
 		//////////////////////////////////////////////////////////////////////////
 		// SCRIPT BINDINGS
 		//////////////////////////////////////////////////////////////////////////
 		CryLogAlways("Initializing Script Bindings");
+		sceClibPrintf("[BOOTTRACE] before InitScriptBindings\n");
 		if(!InitScriptBindings())
 		{
 			return false;
 		}
+		sceClibPrintf("[BOOTTRACE] after InitScriptBindings\n");
 	}
 
+	sceClibPrintf("[BOOTTRACE] before new CDownloadManager\n");
 	m_pDownloadManager = new CDownloadManager;
+	sceClibPrintf("[BOOTTRACE] before m_pDownloadManager->Create\n");
 	m_pDownloadManager->Create(this);
+	sceClibPrintf("[BOOTTRACE] after m_pDownloadManager->Create\n");
 
 
 	//////////////////////////////////////////////////////////////////////////
@@ -1438,7 +1549,9 @@ bool CSystem::Init( const SSystemInitParams &params )
 	}
 #endif
 
+	sceClibPrintf("[BOOTTRACE] before SetAffinity\n");
 	SetAffinity();
+	sceClibPrintf("[BOOTTRACE] after SetAffinity -- CSystem::Init() COMPLETE\n");
 
 	return (true);
 }

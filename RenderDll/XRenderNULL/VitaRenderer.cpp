@@ -30,7 +30,9 @@ IPhysicalWorld *pIPhysicalWorld;
 CVitaRenderer::CVitaRenderer()
 	: m_nWidth(0), m_nHeight(0), m_nColorBpp(32), m_nDepthBpp(24), m_nStencilBpp(8), m_cType(0)
 {
+	sceClibPrintf("[BOOTTRACE] CVitaRenderer ctor entered\n");
 	gcpVitaRenderer = this;
+	sceClibPrintf("[BOOTTRACE] CVitaRenderer ctor done\n");
 }
 
 CVitaRenderer::~CVitaRenderer()
@@ -40,6 +42,7 @@ CVitaRenderer::~CVitaRenderer()
 
 WIN_HWND CVitaRenderer::Init(int x, int y, int width, int height, unsigned int cbpp, int zbpp, int sbits, bool fullscreen, WIN_HINSTANCE hinst, WIN_HWND Glhwnd, WIN_HDC Glhdc, WIN_HGLRC hGLrc, bool bReInit)
 {
+	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init entered, width=%d height=%d cbpp=%u\n", width, height, cbpp);
 	m_nWidth = width;
 	m_nHeight = height;
 	m_nColorBpp = cbpp;
@@ -48,8 +51,11 @@ WIN_HWND CVitaRenderer::Init(int x, int y, int width, int height, unsigned int c
 #if defined(LINUX)
 	/* Vita: real vitaGL context + framebuffer -- same call validated
 	   standalone by vita_bringup/src/main.c. */
+	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init: before vglInit\n");
 	vglInit(0x400000);
+	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init: after vglInit, before glViewport\n");
 	glViewport(0, 0, width, height);
+	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init: after glViewport\n");
 	return (WIN_HWND)this; // just checked against NULL by callers
 #else
 	return 0;
@@ -311,12 +317,16 @@ float CVitaRenderer::EF_GetWaterZElevation(float fX, float fY) { return 0.0f; }
 extern "C" DLL_EXPORT IRenderer* PackageRenderConstructor(int argc, char* argv[], SCryRenderInterface *sp);
 DLL_EXPORT IRenderer* PackageRenderConstructor(int argc, char* argv[], SCryRenderInterface *sp)
 {
+	sceClibPrintf("[BOOTTRACE] PackageRenderConstructor entered, sp=%p\n", (void*)sp);
 	iConsole = sp->ipConsole;
 	iLog = sp->ipLog;
 	iSystem = sp->ipSystem;
 	iTimer = sp->ipTimer;
 	pTest_int = sp->ipTest_int;
 	pIPhysicalWorld = sp->pIPhysicalWorld;
+	sceClibPrintf("[BOOTTRACE] PackageRenderConstructor: before new CVitaRenderer\n");
 
-	return new CVitaRenderer();
+	IRenderer *r = new CVitaRenderer();
+	sceClibPrintf("[BOOTTRACE] PackageRenderConstructor: after new CVitaRenderer, r=%p\n", (void*)r);
+	return r;
 }

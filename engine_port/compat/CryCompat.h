@@ -323,7 +323,9 @@ struct _CryFindHandle {
 
 inline bool _CryFindFillNext64(_CryFindHandle *h, __finddata64_t *fd) {
 	struct dirent *ent;
+	sceClibPrintf("[BOOTTRACE] _CryFindFillNext64 entered, pattern=%s\n", h->pattern.c_str());
 	while ((ent = readdir(h->dir)) != 0) {
+		sceClibPrintf("[BOOTTRACE] _CryFindFillNext64: readdir -> %s\n", ent->d_name);
 		if (fnmatch(h->pattern.c_str(), ent->d_name, 0) != 0)
 			continue;
 		std::string full = h->dirPath + "/" + ent->d_name;
@@ -343,18 +345,24 @@ inline bool _CryFindFillNext64(_CryFindHandle *h, __finddata64_t *fd) {
 }
 
 inline intptr_t _findfirst64(const char *pattern, __finddata64_t *fd) {
+	sceClibPrintf("[BOOTTRACE] _findfirst64 entered, pattern=%s\n", pattern ? pattern : "(null)");
 	std::string p(pattern);
 	size_t slash = p.find_last_of('/');
 	std::string dirPath  = (slash == std::string::npos) ? "." : p.substr(0, slash);
 	std::string filePattern = (slash == std::string::npos) ? p : p.substr(slash + 1);
+	sceClibPrintf("[BOOTTRACE] _findfirst64: before opendir, dirPath=%s\n", dirPath.c_str());
 	DIR *d = opendir(dirPath.c_str());
+	sceClibPrintf("[BOOTTRACE] _findfirst64: after opendir, d=%p\n", (void*)d);
 	if (!d) return -1;
 	_CryFindHandle *h = new _CryFindHandle{d, dirPath, filePattern};
+	sceClibPrintf("[BOOTTRACE] _findfirst64: before _CryFindFillNext64\n");
 	if (!_CryFindFillNext64(h, fd)) {
+		sceClibPrintf("[BOOTTRACE] _findfirst64: FillNext64 false, closing\n");
 		closedir(d);
 		delete h;
 		return -1;
 	}
+	sceClibPrintf("[BOOTTRACE] _findfirst64: FillNext64 true, returning handle\n");
 	return (intptr_t)h;
 }
 inline int _findnext64(intptr_t handle, __finddata64_t *fd) {
