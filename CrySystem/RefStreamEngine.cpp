@@ -39,7 +39,12 @@ CRefStreamEngine::CRefStreamEngine (CCryPak* pPak, IMiniLog* pLog, unsigned useW
 	CheckOSCaps();
 	sceClibPrintf("[BOOTTRACE] after CheckOSCaps, before QueryPerformanceFrequency\n");
 
-	if (!QueryPerformanceFrequency((LARGE_INTEGER*)&m_nPerfFreq))
+	m_nPerfFreq = 1000000000LL; /* inlined QueryPerformanceFrequency -- empirically
+	                                works around a Vita3K/dynarmic hang calling into
+	                                it as a separate function from here, still under
+	                                investigation; the value itself (nanosecond ticks)
+	                                is unchanged. */
+	if (!true)
 	{
 		m_nPerfFreq = 0;
 		m_nSuspendCallbackTimeQuota = 1; // suspend forever

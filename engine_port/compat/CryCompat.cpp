@@ -7,15 +7,21 @@
 #include "CryCompatIO.h"
 #include <time.h>
 
+/* Callers cast an arbitrary (sometimes misaligned) class-member address
+   to LARGE_INTEGER* -- writing an 8-byte QuadPart directly through that
+   pointer can fault on ARM if the member isn't naturally 8-byte
+   aligned. memcpy avoids the alignment requirement entirely. */
 bool QueryPerformanceCounter(LARGE_INTEGER *out) {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
-	out->QuadPart = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+	long long q = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+	memcpy(&out->QuadPart, &q, sizeof(q));
 	return true;
 }
 
 bool QueryPerformanceFrequency(LARGE_INTEGER *out) {
-	out->QuadPart = 1000000000LL;
+	long long q = 1000000000LL;
+	memcpy(&out->QuadPart, &q, sizeof(q));
 	return true;
 }
 
