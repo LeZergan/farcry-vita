@@ -849,18 +849,25 @@ bool CSystem::InitAISystem()
 bool CSystem::InitScriptSystem()
 {
 #if defined(LINUX)
-	/* Vita: CreateScriptSystem's call boundary hangs/crashes on Vita3K the
-	   same way QueryPerformanceFrequency's did (see InitStreamEngine) --
-	   not even the callee's own first trace line executes, ruling out
-	   its actual logic. Real Lua script execution won't work until this
-	   is properly resolved -- see engine_port/compat/README.md. In the
-	   meantime, m_pScriptSystem needs to be non-null: dozens of call
-	   sites across the engine dereference it unconditionally (no null
-	   checks -- see e.g. CXConsoleVariable::CreateTaggedValue), so a real
-	   honest no-op stub (ScriptStubs.h/cpp) stands in instead of trying
-	   to null-guard every individual call site. */
-	m_pScriptSink = NULL;
-	m_pScriptSystem = new CStubScriptSystem();
+	/* Vita: re-attempting the real, statically-linked CreateScriptSystem
+	   (previously believed to hang at the call boundary the same way
+	   QueryPerformanceFrequency did). Several root causes found *later*
+	   this session (MODULE_PATH null-string UB in CryLoadLibrary, the
+	   engine-wide min()/max() dangling-reference bug, the physics
+	   uninitialized-global crash) were each independently misdiagnosed as
+	   "call boundary" hangs before their real cause was found -- this may
+	   be another one of those rather than a genuine JIT boundary issue.
+	   Falls back to the CStubScriptSystem below if it's still null. */
+	sceClibPrintf("[BOOTTRACE] InitScriptSystem: before real CreateScriptSystem\n");
+	m_pScriptSink = new CScriptSink(this, m_pConsole);
+	m_pScriptSystem = CreateScriptSystem(this, m_pScriptSink, NULL, true);
+	sceClibPrintf("[BOOTTRACE] InitScriptSystem: after real CreateScriptSystem, m_pScriptSystem=%p\n", (void*)m_pScriptSystem);
+	if (!m_pScriptSystem)
+	{
+		delete m_pScriptSink;
+		m_pScriptSink = NULL;
+		m_pScriptSystem = new CStubScriptSystem();
+	}
 	/* fall through to the shared tail below (SetScriptSystem/PostInit) --
 	   do NOT return early here, CXConsole has its own separate
 	   m_pScriptSystem member that only gets set by that shared code. */
