@@ -159,8 +159,17 @@ public:
 	}
 	~FileEntryTransactionAdd()
 	{
-		if (m_pFileEntry && !m_bComitted)
-			m_pCache->RemoveFile(m_szRelativePath);
+		/* Vita: this rollback call hangs on Vita3K (a stable-address,
+		   deterministic-PC-0 crash whose location doesn't shift no matter
+		   what's edited in CacheRW::RemoveFile/FileEntryTree::RemoveFile
+		   themselves -- same "call boundary" class of Vita3K/dynarmic
+		   quirk seen with QueryPerformanceFrequency and CreateScriptSystem,
+		   see engine_port/compat/README.md). Only fires on an uncommitted
+		   write-transaction rollback (pak write failure/abort path), not
+		   on the read side or normal successful writes, so skipping it
+		   leaves an orphaned zero-length directory entry on rollback
+		   rather than removing it -- a real but minor leak, not a boot
+		   blocker. */
 	}
 	void Commit()
 	{

@@ -44,13 +44,21 @@ CRYPHYSICS_API IPhysicalWorld *CreatePhysicalWorld(ISystem *pSystem)
 IPhysicalWorld *CreatePhysicalWorld(ISystem *pSystem)
 #endif
 {
+	sceClibPrintf("[BOOTTRACE] CreatePhysicalWorld entered, pSystem=%p\n", (void*)pSystem);
 	gISystem = pSystem;
+	sceClibPrintf("[BOOTTRACE] CreatePhysicalWorld: before GetCPUFlags\n");
 	g_bHasSSE = (pSystem->GetCPUFlags() & CPUF_SSE)!=0;
+	sceClibPrintf("[BOOTTRACE] CreatePhysicalWorld: before sincos loop\n");
 	for(int i=0; i<SINCOSTABSZ; i++) {
 		g_costab[i] = cosf(i*(pi*0.5f/SINCOSTABSZ));
 		g_sintab[i] = sinf(i*(pi*0.5f/SINCOSTABSZ));
 	}
 	//_controlfp(_EM_ZERODIVIDE,_MCW_EM);
-	return new CPhysicalWorld(pSystem->GetILog());
+	sceClibPrintf("[BOOTTRACE] CreatePhysicalWorld: before GetILog\n");
+	ILog *pLog = pSystem->GetILog();
+	sceClibPrintf("[BOOTTRACE] CreatePhysicalWorld: before new CPhysicalWorld, pLog=%p\n", (void*)pLog);
+	IPhysicalWorld *pWorld = new CPhysicalWorld(pLog);
+	sceClibPrintf("[BOOTTRACE] CreatePhysicalWorld: after new CPhysicalWorld\n");
+	return pWorld;
 }
 

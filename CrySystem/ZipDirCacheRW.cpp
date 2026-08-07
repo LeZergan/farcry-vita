@@ -147,8 +147,10 @@ ZipDir::ErrorEnum ZipDir::CacheRW::UpdateFile (const char* szRelativePath, void*
 // deletes the file from the archive
 ZipDir::ErrorEnum ZipDir::CacheRW::RemoveFile (const char* szRelativePath)
 {
+	sceClibPrintf("[BOOTTRACE] CacheRW::RemoveFile entered, path=%s\n", szRelativePath ? szRelativePath : "(null)");
 	// find the last slash in the path
 	const char* pSlash = max(strrchr(szRelativePath, '/'), strrchr(szRelativePath, '\\'));
+	sceClibPrintf("[BOOTTRACE] CacheRW::RemoveFile: after max/strrchr, before GetRoot/FindExact\n");
 
 	const char* pFileName; // the name of the file to delete
 
@@ -157,8 +159,10 @@ ZipDir::ErrorEnum ZipDir::CacheRW::RemoveFile (const char* szRelativePath)
 	if (pSlash)
 	{
 		FindDirRW fd (GetRoot());
+		sceClibPrintf("[BOOTTRACE] CacheRW::RemoveFile: before FindExact\n");
 		// the directory to remove
 		pDir = fd.FindExact(string (szRelativePath, pSlash-szRelativePath).c_str());
+		sceClibPrintf("[BOOTTRACE] CacheRW::RemoveFile: after FindExact, pDir=%p\n", (void*)pDir);
 		if (!pDir)
 			return ZD_ERROR_DIR_NOT_FOUND;// there is no such directory
 		pFileName = pSlash+1;
@@ -166,10 +170,13 @@ ZipDir::ErrorEnum ZipDir::CacheRW::RemoveFile (const char* szRelativePath)
 	else
 	{
 		pDir = GetRoot();
+		sceClibPrintf("[BOOTTRACE] CacheRW::RemoveFile: else branch, GetRoot()=%p\n", (void*)pDir);
 		pFileName = szRelativePath;
 	}
 
+	sceClibPrintf("[BOOTTRACE] CacheRW::RemoveFile: before pDir->RemoveFile\n");
 	ErrorEnum e = pDir->RemoveFile (pFileName);
+	sceClibPrintf("[BOOTTRACE] CacheRW::RemoveFile: after pDir->RemoveFile\n");
 	if (e == ZD_ERROR_SUCCESS)
 		m_nFlags |= FLAGS_UNCOMPACTED|FLAGS_CDR_DIRTY;
 	return e;

@@ -47,9 +47,7 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 
 	
 	m_bLoadedFromScript=false;
-	sceClibPrintf("[BOOTTRACE] CXConsoleVariable ctor: before CanGetValueFromScript, this=%p m_pScriptSystem=%p\n", (void*)this, (void*)m_pScriptSystem);
 	bool bCanGet = CanGetValueFromScript();
-	sceClibPrintf("[BOOTTRACE] CXConsoleVariable ctor: CanGetValueFromScript=%d\n", (int)bCanGet);
 	if (bCanGet && m_pScriptSystem->GetGlobalValue(m_sName,sTempValue))
 	{
 		m_bLoadedFromScript=true;
@@ -57,9 +55,21 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 		*m_fValue=(float)(atof(m_sValue));
 		*m_nValue=atoi(m_sValue);
 	}
-	sceClibPrintf("[BOOTTRACE] CXConsoleVariable ctor: before CreateTaggedValue\n");
+#if defined(LINUX)
+	/* Vita: CreateTaggedValue is a guaranteed no-op on the stub script
+	   system (see ScriptStubs.cpp -- always returns 0), but the virtual
+	   call itself hangs/crashes on Vita3K after a handful of identical
+	   prior calls succeed -- same "call boundary" class of Vita3K/dynarmic
+	   quirk as QueryPerformanceFrequency and FileEntryTransactionAdd's
+	   RemoveFile (see engine_port/compat/README.md). Since it's a no-op
+	   either way under the stub, skip the call outright instead of
+	   chasing an apparent emulator-level issue. Also keep tracing minimal
+	   right around this spot -- the boundary appears sensitive to total
+	   code/log volume, not to CreateTaggedValue's own logic. */
+	m_hScriptTag=0;
+#else
 	m_hScriptTag=m_pScriptSystem->CreateTaggedValue(m_sName,m_sValue);
-	sceClibPrintf("[BOOTTRACE] CXConsoleVariable ctor: after CreateTaggedValue\n");
+#endif
 }
 
 
@@ -85,7 +95,7 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 	{
 	case CVAR_STRING:
 		m_sValue = (char *)pVar;
-		
+
 		if(CanGetValueFromScript() && m_pScriptSystem->GetGlobalValue(sName,sTempValue))
 		{
 			m_bLoadedFromScript=true;
@@ -93,7 +103,11 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 			*m_fValue=(float)(atof(sTempValue));
 			*m_nValue=atoi(sTempValue);
 		}
+#if defined(LINUX)
+		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
+#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(sName,m_sValue);
+#endif
 	break;
 	case CVAR_INT:
 		m_nValue=(int *)pVar;
@@ -103,7 +117,11 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 			m_bLoadedFromScript=true;
 			*m_nValue=atoi(sTempValue);
 		}
+#if defined(LINUX)
+		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
+#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(sName,m_nValue);
+#endif
 		memset(m_sValue,0,VAR_STRING_SIZE);
 	break;
 	case CVAR_FLOAT:
@@ -113,7 +131,11 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 			m_bLoadedFromScript=true;
 			*m_fValue=(float)(atof(sTempValue));
 		}
+#if defined(LINUX)
+		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
+#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(sName,m_fValue);
+#endif
 		memset(m_sValue,0,VAR_STRING_SIZE);
 	break;
 	default:
@@ -121,7 +143,6 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 		break;
 	}
 	Refresh();
-	
 }
 
 //! Changes the variable storage pointer
@@ -130,24 +151,38 @@ void CXConsoleVariable::SetSrc (void* pSrc)
 	if (!pSrc)
 		return;
 
+#if !defined(LINUX)
 	m_pScriptSystem->RemoveTaggedValue(m_hScriptTag);
+#endif
 
 	switch (m_nType)
 	{
 	case CVAR_STRING:
 		strcpy ((char*)pSrc, m_sValue );
 		m_sValue = (char*)pSrc;
+#if defined(LINUX)
+		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
+#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(m_sName,m_sValue);
+#endif
 		break;
 	case CVAR_INT:
 		*(int*)pSrc = *m_nValue;
 		m_nValue = (int*)pSrc;
+#if defined(LINUX)
+		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
+#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(m_sName,m_nValue);
+#endif
 		break;
 	case CVAR_FLOAT:
 		*(float*)pSrc = *m_fValue;
 		m_fValue = (float*)pSrc;
+#if defined(LINUX)
+		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
+#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(m_sName,m_fValue);
+#endif
 		break;
 	}
 
@@ -181,14 +216,10 @@ CXConsoleVariable::~CXConsoleVariable()
 //////////////////////////////////////////////////////////////////////////
 bool CXConsoleVariable::CanGetValueFromScript()
 {
-	sceClibPrintf("[BOOTTRACE] CanGetValueFromScript: m_nFlags=%d\n", m_nFlags);
 	if (m_nFlags&(VF_CHEAT|VF_READONLY))
 	{
-		sceClibPrintf("[BOOTTRACE] CanGetValueFromScript: flag matched, before GetISystem()\n");
 		ISystem *pSys = GetISystem();
-		sceClibPrintf("[BOOTTRACE] CanGetValueFromScript: GetISystem()=%p, before IsDevMode\n", (void*)pSys);
 		bool bDev = ((CSystem*)pSys)->IsDevMode();
-		sceClibPrintf("[BOOTTRACE] CanGetValueFromScript: IsDevMode=%d\n", (int)bDev);
 		if (!bDev)
 			return false;
 	}
@@ -212,7 +243,8 @@ char *CXConsoleVariable::GetString()
 
 //////////////////////////////////////////////////////////////////////////
 void CXConsoleVariable::ForceSet(const char* s)
-{	
+{
+	sceClibPrintf("[BOOTTRACE] ForceSet entered, name=%s, value=%s\n", m_sName ? m_sName : "(null)", s ? s : "(null)");
 	bool bCheat=false;
 	bool bReadOnly=false;
 	if (m_nFlags & VF_READONLY)
@@ -227,8 +259,10 @@ void CXConsoleVariable::ForceSet(const char* s)
 		bCheat=true;
 	}
 
+	sceClibPrintf("[BOOTTRACE] ForceSet: before Set(), m_pConsole=%p\n", (void*)m_pConsole);
 	Set(s);
-		
+	sceClibPrintf("[BOOTTRACE] ForceSet: after Set()\n");
+
 	if (bReadOnly)
 		m_nFlags|=VF_READONLY;
 	if (bCheat)
@@ -338,7 +372,9 @@ const char* CXConsoleVariable::GetHelp()
 
 void CXConsoleVariable::Release()
 {
+#if !defined(LINUX)
 	m_pScriptSystem->RemoveTaggedValue(m_hScriptTag);
+#endif
 	m_pConsole->UnregisterVariable(m_sName);
 	delete this;
 }

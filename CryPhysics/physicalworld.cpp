@@ -35,15 +35,24 @@
 
 
 CPhysicalWorld *g_pPhysWorlds[64];
-int g_nPhysWorlds;
+/* Vita: was `int g_nPhysWorlds;` with no initializer, relying on BSS
+   zero-init. On this ARM/vitasdk static-link target it was observed
+   containing garbage (~0x80000000) the first time CPhysicalWorld's ctor
+   ran, producing an out-of-bounds g_pPhysWorlds[] write and crashing --
+   same category of bug as the uninitialized static pthread_mutex_t fixed
+   in CryCommon/LinuxSpecific.h. Explicit initializer + a bounds check
+   below close both the cause and the symptom. */
+int g_nPhysWorlds = 0;
 
 
 CPhysicalWorld::CPhysicalWorld(ILog *pLog)
-{ 
-	m_pLog = pLog; 
-	Init(); 
+{
+	m_pLog = pLog;
+	Init();
+	if (g_nPhysWorlds < 0 || (unsigned)g_nPhysWorlds >= sizeof(g_pPhysWorlds)/sizeof(g_pPhysWorlds[0]))
+		g_nPhysWorlds = 0;
 	g_pPhysWorlds[g_nPhysWorlds] = this;
-	g_nPhysWorlds = min(g_nPhysWorlds+1,sizeof(g_pPhysWorlds)/sizeof(g_pPhysWorlds[0]));
+	g_nPhysWorlds = min(g_nPhysWorlds+1,(int)(sizeof(g_pPhysWorlds)/sizeof(g_pPhysWorlds[0])));
 	m_pEntBeingDeleted = 0;
 	m_bGridThunksChanged = 0;
 	m_bUpdateOnlyFlagged = 0;
