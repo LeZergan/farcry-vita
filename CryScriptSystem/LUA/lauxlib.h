@@ -15,7 +15,12 @@
 #include "lua.h"
 
 
-#ifdef PS2
+/* Vita: same fix and reasoning as lua.h's LUA_API -- unconditional on our
+   target rather than relying on #ifndef LUALIB_API's include-order
+   dependent fallback (which was causing "conflicting declaration...with
+   C linkage" errors when this header and lualib.h's copy of the same
+   macro got expanded differently depending on which was included first). */
+#if defined(PS2) || defined(LINUX)
 #define LUALIB_API    extern "C"
 #else
 #ifndef LUALIB_API

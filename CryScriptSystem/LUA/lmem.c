@@ -56,7 +56,11 @@ void *luaM_growaux (lua_State *L, void *block, int *size, int size_elems,
 
 
 extern int g_dumpStackOnAlloc;
-extern void DumpCallStack( lua_State *L );
+/* Vita: this file is force-compiled as C++ (see the CPPASC build rule);
+   plain `extern` here gets C++-mangled linkage, which doesn't match the
+   real definition's `extern "C"` in ScriptSystem.cpp -- same class of
+   mismatch as lua.h's LUA_API, just between these two specific files. */
+extern "C" void DumpCallStack( lua_State *L );
 
 /*
 ** generic allocation routine.

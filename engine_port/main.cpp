@@ -12,9 +12,18 @@
    placeholder -- there must be zero ambiguity about what's real. */
 #include <ISystem.h>
 #include <IRenderer.h>
+#include <IFont.h>
+#include <IScriptSystem.h>
 #if defined(LINUX)
 #include <psp2/kernel/clib.h>
 #include <psp2/ctrl.h>
+
+/* Vita: real Lua execution of the real MenuScreens/MainScreen.lua, with a
+   minimal native stand-in for CryGame's real (unported) UI framework --
+   see engine_port/MenuUI.cpp for exactly what's real and what isn't. */
+void RegisterMenuUIBindings(ISystem *pSystem);
+int GetMenuScreenItemCount(const char *szScreenName);
+const char *GetMenuScreenItemLabel(const char *szScreenName, int nIndex);
 #endif
 
 int main(int argc, char *argv[]) {
@@ -47,6 +56,34 @@ int main(int argc, char *argv[]) {
 	   it here would hide a bug that blocks loading more than one real
 	   game texture per pak. */
 
+	// Real Lua execution of the real main menu script -- see MenuUI.cpp.
+	sceClibPrintf("[BOOTTRACE] main: before RegisterMenuUIBindings\n");
+	RegisterMenuUIBindings(pSystem);
+	IScriptSystem *pScriptSystem = pSystem->GetIScriptSystem();
+	bool bMenuScriptOk = false;
+	if (pScriptSystem)
+	{
+		bMenuScriptOk = pScriptSystem->ExecuteFile("SCRIPTS/MenuScreens/MainScreen.lua", true, true);
+	}
+	sceClibPrintf("[BOOTTRACE] main: MainScreen.lua ExecuteFile=%d, MainScreen items=%d\n",
+		(int)bMenuScriptOk, GetMenuScreenItemCount("MainScreen"));
+
+	IFFont *pMenuFont = NULL;
+	if (pSystem->GetICryFont())
+	{
+		pMenuFont = pSystem->GetICryFont()->NewFont("MenuFont");
+		if (pMenuFont && !pMenuFont->Load("languages/fonts/console.xml"))
+		{
+			sceClibPrintf("[BOOTTRACE] main: menu font Load failed\n");
+			pMenuFont = NULL;
+		}
+	}
+	if (pMenuFont)
+	{
+		pMenuFont->SetSize(vector2f(24.0f, 24.0f));
+		pMenuFont->SetColor(color4f(1.0f, 1.0f, 1.0f, 1.0f));
+	}
+
 	if (pRenderer) {
 		for (;;) {
 			SceCtrlData pad;
@@ -58,6 +95,13 @@ int main(int argc, char *argv[]) {
 				// Draw the real decoded bitmap at its native pixel size, no scaling/cropping.
 				pRenderer->Draw2dImage(0.0f, 0.0f, (float)pSplash->GetWidth(), (float)pSplash->GetHeight(),
 					pSplash->GetTextureID(), 0,0,1,1, 0, 1,1,1,1, 1.0f);
+			}
+			if (pMenuFont) {
+				// Real labels captured from the real, executed MainScreen.lua (see MenuUI.cpp).
+				int nItems = GetMenuScreenItemCount("MainScreen");
+				for (int i = 0; i < nItems; i++) {
+					pMenuFont->DrawString(40.0f, 80.0f + i * 34.0f, GetMenuScreenItemLabel("MainScreen", i));
+				}
 			}
 			pRenderer->Update();
 		}

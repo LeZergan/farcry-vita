@@ -96,7 +96,18 @@ typedef L_CHAR lua_char;
 
 
 /* mark for all API functions */
-#ifdef PS2
+#if defined(PS2) || defined(LINUX)
+/* Vita: this whole LUA/ directory is force-compiled as C++ (see the
+   CPPASC build rule), so plain `extern` here means C++-mangled linkage --
+   fine as long as literally every caller only ever goes through this same
+   header in the same way, but a stale, previously-built .o compiled
+   before this was noticed (engine_port/LUA/lapi.o) had picked up
+   unmangled C linkage from some earlier state of this file/build, and a
+   fresh rebuild of the same source with today's flags produced mangled
+   symbols instead -- undefined references the moment a new caller
+   (MenuUI.cpp) declared them consistently with a fresh compile. Forcing
+   real extern "C" here, unconditionally for our target, removes the
+   ambiguity for every translation unit from now on. */
 #define LUA_API               extern "C"
 #else
 #ifndef LUA_API

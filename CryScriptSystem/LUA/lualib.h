@@ -11,7 +11,8 @@
 #include "lua.h"
 
 
-#ifdef PS2
+/* Vita: same fix and reasoning as lua.h's LUA_API. */
+#if defined(PS2) || defined(LINUX)
 #define LUALIB_API    extern "C"
 #else
 #ifndef LUALIB_API
