@@ -14,6 +14,9 @@ static char THIS_FILE[] = __FILE__;
 #include "RenderPCH.h"
 #include "NULL_Renderer.h"
 
+#if defined(LINUX)
+#include <vitaGL.h>
+#endif
 
 bool CNULLRenderer::SetGammaDelta(const float fGamma)
 {
@@ -75,6 +78,12 @@ WIN_HWND CNULLRenderer::Init(int x,int y,int width,int height,unsigned int cbpp,
   EF_PipelineInit();
 
 #if defined(LINUX)
+	/* Vita: real vitaGL context + framebuffer, so BeginFrame/Update below
+	   can actually put pixels on screen instead of being pure no-ops.
+	   4MB legacy pool matches the size validated by the standalone
+	   vita_bringup smoke test (vita_bringup/src/main.c). */
+	vglInit(0x400000);
+	glViewport(0, 0, width, height);
 	return (WIN_HWND)this;//it just get checked against NULL anyway
 #else
   return (WIN_HWND)GetDesktopWindow();
@@ -124,10 +133,9 @@ int *pTest_int;
 //CryCharManager *pCharMan;
 IPhysicalWorld *pIPhysicalWorld;
 
-ISystem* GetISystem()
-{
-	return iSystem;
-}
+/* Vita: this module-local GetISystem() collided with CrySystem/System.cpp's
+   real one under -Wl,--allow-multiple-definition -- see Cry3DEngine.cpp for
+   the full explanation. */
 
 extern "C" DLL_EXPORT IRenderer* PackageRenderConstructor(int argc, char* argv[], SCryRenderInterface *sp);
 DLL_EXPORT IRenderer* PackageRenderConstructor(int argc, char* argv[], SCryRenderInterface *sp)

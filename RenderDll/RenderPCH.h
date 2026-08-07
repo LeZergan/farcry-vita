@@ -790,7 +790,13 @@ L = __rdtsc();
 #endif
 
 #elif defined(LINUX)
-	rdtscl( L );
+	/* Vita: rdtscl() is an x86 RDTSC macro (from the never-portable
+	   <asm/msr.h>, now stubbed empty -- see engine_port/compat/README.md).
+	   This is a profiling-only cycle counter, not correctness-critical, so
+	   a monotonic microsecond clock is a fine substitute on ARM. */
+	LARGE_INTEGER li;
+	QueryPerformanceCounter(&li);
+	L = (uint)li.QuadPart;
 #endif
   return L;
 }

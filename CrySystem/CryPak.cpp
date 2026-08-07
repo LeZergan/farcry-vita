@@ -56,9 +56,7 @@ m_bRememberOpenedFiles(false),
 m_pPakVars (pPakVars?pPakVars:&g_PakVars),
 m_mapMissingFiles ( std::less<string>(), MissingFileMapAllocator(g_pBigHeap) )
 {
-	sceClibPrintf("[BOOTTRACE] CCryPak ctor body entered\n");
 	char szCurrentDir[0x800];
-	sceClibPrintf("[BOOTTRACE] before GetCurrentDirectory\n");
 	if (GetCurrentDirectory(sizeof(szCurrentDir), szCurrentDir))
 	{
 		// normalize it (lower-char with forward slashes and trailing slash)
@@ -1123,25 +1121,20 @@ bool CCryPak::ClosePacks(const char *pWildcardIn, unsigned nFlags)
 
 bool CCryPak::InitPack(const char *szBasePath, unsigned nFlags)
 {
-	sceClibPrintf("[BOOTTRACE] InitPack entered\n");
 	string strPath = szBasePath;
 	if (szBasePath && szBasePath[0])
 		strPath += "\\*.cpk";
 	else
 		strPath += "*.cpk";
 
-	sceClibPrintf("[BOOTTRACE] InitPack: before AdjustFileName\n");
 	char cWorkBuf[g_nMaxPath];
 	const char* cWork = AdjustFileName(strPath.c_str(), cWorkBuf, nFlags);
-	sceClibPrintf("[BOOTTRACE] InitPack: after AdjustFileName, before _findfirst64\n");
 
 	bool bFind = false;
 	struct __finddata64_t fileinfo;
 	intptr_t handle = _findfirst64 (cWork, &fileinfo);
-	sceClibPrintf("[BOOTTRACE] InitPack: after _findfirst64, handle=%d\n", (int)handle);
 	if (handle == -1)
 	{
-		sceClibPrintf("[BOOTTRACE] InitPack: handle==-1, about to return true\n");
 		return true;
 	}
 	do
@@ -1163,9 +1156,7 @@ bool CCryPak::InitPack(const char *szBasePath, unsigned nFlags)
 /////////////////////////////////////////////////////
 bool CCryPak::Init(const char *szBasePath)
 {
-	sceClibPrintf("[BOOTTRACE] CCryPak::Init entered\n");
 	bool r = InitPack(szBasePath);
-	sceClibPrintf("[BOOTTRACE] CCryPak::Init: InitPack returned, about to return from Init\n");
 	return r;
 }
 

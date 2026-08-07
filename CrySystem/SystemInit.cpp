@@ -173,7 +173,20 @@ bool CSystem::OpenRenderLibrary(int type)
   sp.ipTimer = GetITimer();
 	sp.pIPhysicalWorld = m_pIPhysicalWorld;
 
-#ifndef _XBOX
+#if defined(LINUX)
+	/* Vita: same broken LoadDLL/dlopen indirection already fixed for
+	   script/network/physics -- no renderer .so was ever built for this
+	   static-link target. Call the statically-linked XRenderNULL factory
+	   directly (see RenderDll/XRenderNULL/NULL_System.cpp). */
+	extern IRenderer* PackageRenderConstructor(int argc, char* argv[], SCryRenderInterface *sp);
+	m_pRenderer = PackageRenderConstructor(0, NULL, &sp);
+	if (!m_pRenderer)
+	{
+		Error("Error: Couldn't construct render driver (Vita/NULL)");
+		return false;
+	}
+	m_pRenderer->SetType(type);
+#elif !defined(_XBOX)
 	char libname[128];
 	if (type == R_GL_RENDERER)
     strcpy(libname, "XRenderOGL.dll");
@@ -864,16 +877,12 @@ bool CSystem::InitScriptSystem()
 /////////////////////////////////////////////////////////////////////////////////
 bool CSystem::InitFileSystem()
 {
-	sceClibPrintf("[BOOTTRACE] InitFileSystem: before new CCryPak\n");
 	m_pIPak = new CCryPak(m_pLog,&m_PakVar);
-	sceClibPrintf("[BOOTTRACE] InitFileSystem: after new CCryPak\n");
 
 	if (m_bEditor)
 		m_pIPak->RecordFileOpen( true );
 
-	sceClibPrintf("[BOOTTRACE] InitFileSystem: before m_pIPak->Init call\n");
 	bool r = m_pIPak->Init("");
-	sceClibPrintf("[BOOTTRACE] InitFileSystem: after m_pIPak->Init call, about to return\n");
 	return r;
 }
 
@@ -1156,19 +1165,15 @@ bool CSystem::Init( const SSystemInitParams &params )
 
 	if (!params.pLog)
 	{
-		sceClibPrintf("[BOOTTRACE] before new CLog\n");
 		m_pLog = new CLog(this);
-		sceClibPrintf("[BOOTTRACE] after new CLog, before SetFileName\n");
 		if (CmdlineSink.m_sLogFile.size())
 			m_pLog->SetFileName(CmdlineSink.m_sLogFile.c_str());
 		else if (params.sLogFileName)
 			m_pLog->SetFileName(params.sLogFileName);
 		else
 			m_pLog->SetFileName(DEFAULT_LOG_FILENAME);
-		sceClibPrintf("[BOOTTRACE] after SetFileName, before LogVersion\n");
 
 		LogVersion();
-		sceClibPrintf("[BOOTTRACE] after LogVersion\n");
 	}
 	else
   {
@@ -1194,31 +1199,22 @@ bool CSystem::Init( const SSystemInitParams &params )
 	//////////////////////////////////////////////////////////////////////////
 	// CREATE CONSOLE
 	//////////////////////////////////////////////////////////////////////////
-	sceClibPrintf("[BOOTTRACE] before new CXConsole\n");
 	m_pConsole = new CXConsole;
-	sceClibPrintf("[BOOTTRACE] after new CXConsole\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// FILE SYSTEM
 	//////////////////////////////////////////////////////////////////////////
 
 #if !defined(PS2) && !defined (GC)
-	sceClibPrintf("[BOOTTRACE] before new CCpuFeatures\n");
   m_pCpu = new CCpuFeatures;
-	sceClibPrintf("[BOOTTRACE] before m_pCpu->Detect()\n");
   m_pCpu->Detect();
-	sceClibPrintf("[BOOTTRACE] after m_pCpu->Detect()\n");
 #endif
 
-	sceClibPrintf("[BOOTTRACE] before OS User name log\n");
 	CryLogAlways("OS User name: '%s'",GetUserName());
-	sceClibPrintf("[BOOTTRACE] after OS User name log\n");
 
 	CryLogAlways("File System Initialization");
-	sceClibPrintf("[BOOTTRACE] after File System Init log, before InitFileSystem()\n");
 
 	InitFileSystem();
-	sceClibPrintf("[BOOTTRACE] after InitFileSystem() call returns to caller\n");
 
 	if (CmdlineSink.m_sMod!="")
 	{
@@ -1241,54 +1237,43 @@ bool CSystem::Init( const SSystemInitParams &params )
 	else
 		memset(m_szGameMOD,0,MAX_PATH);
 
-	sceClibPrintf("[BOOTTRACE] after m_sMod handling, before Stream Engine log\n");
 	CryLogAlways("Stream Engine Initialization");
-	sceClibPrintf("[BOOTTRACE] after Stream Engine log, before InitStreamEngine()\n");
 	InitStreamEngine();
-	sceClibPrintf("[BOOTTRACE] after InitStreamEngine()\n");
 
 
 	//////////////////////////////////////////////////////////////////////////
 	// SCRIPT SYSTEM
 	//////////////////////////////////////////////////////////////////////////
 	CryLogAlways("Script System Initialization");
-	sceClibPrintf("[BOOTTRACE] before InitScriptSystem()\n");
 	if(!InitScriptSystem())
 		return false;
-	sceClibPrintf("[BOOTTRACE] after InitScriptSystem()\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// After creation of script system we can create system vars.
 	CreateSystemVars();
-	sceClibPrintf("[BOOTTRACE] after CreateSystemVars()\n");
 	//////////////////////////////////////////////////////////////////////////
 
 	if(m_bEditor || CmdlineSink.m_bDevMode)
 		SetDevMode(true);											// In Dev mode.
 	 else
 		SetDevMode(false);										// Not Dev mode.
-	sceClibPrintf("[BOOTTRACE] after SetDevMode()\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	//Load config files
 	//////////////////////////////////////////////////////////////////////////
 
 	LoadConfiguration("System.Cfg");
-	sceClibPrintf("[BOOTTRACE] after LoadConfiguration(System.Cfg)\n");
 	LoadConfiguration("SystemCfgOverride.Cfg");
-	sceClibPrintf("[BOOTTRACE] after LoadConfiguration(SystemCfgOverride.Cfg)\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// After loading configuration.
 	//////////////////////////////////////////////////////////////////////////
 	InitScriptDebugger();
-	sceClibPrintf("[BOOTTRACE] after InitScriptDebugger()\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// Open basic pak files.
 	//////////////////////////////////////////////////////////////////////////
 	OpenBasicPaks();
-	sceClibPrintf("[BOOTTRACE] after OpenBasicPaks()\n");
 
 	//////////////////////////////////////////////////////////////////////////
 	// NETWORK
@@ -1296,12 +1281,9 @@ bool CSystem::Init( const SSystemInitParams &params )
 	if (!params.bPreview)
 	{
 		CryLogAlways("Network initialization");
-		sceClibPrintf("[BOOTTRACE] before InitNetwork()\n");
 		InitNetwork();
-		sceClibPrintf("[BOOTTRACE] after InitNetwork(), before SetLocalIP\n");
 
 		m_pNetwork->SetLocalIP((char *)(CmdlineSink.m_sLocalIP.c_str()));
-		sceClibPrintf("[BOOTTRACE] after SetLocalIP\n");
 	}
 	//////////////////////////////////////////////////////////////////////////
 	// PHYSICS
@@ -1464,9 +1446,7 @@ bool CSystem::Init( const SSystemInitParams &params )
 //////////////////////////////////////////////////////////////////////////
 void CSystem::CreateSystemVars()
 {
-	sceClibPrintf("[BOOTTRACE] CreateSystemVars entered, before m_pCVarQuit\n");
 	m_pCVarQuit = GetIConsole()->CreateVariable("ExitOnQuit","1",VF_DUMPTODISK);
-	sceClibPrintf("[BOOTTRACE] after m_pCVarQuit, before i_direct_input\n");
 
 	i_direct_input = GetIConsole()->CreateVariable("i_direct_input", "1", VF_DUMPTODISK,
 		"Toggles direct input capability.\n"

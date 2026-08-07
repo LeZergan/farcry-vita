@@ -21,6 +21,9 @@ Compile with: `-I engine_port/compat -I CryCommon -I CrySystem -I CrySystem/zlib
   out to be needed, it means this LINUX branch never actually built
   upstream and needs a proper fix at the include site.
 - `sys/io.h` - stub, empty. x86 raw I/O port access; meaningless on ARM.
+- `asm/msr.h` - stub, empty. x86 Model-Specific-Register access, pulled in
+  unconditionally by RenderDll/RenderPCH.h under `LINUX`; nothing in the
+  renderer actually calls an MSR intrinsic from it.
 
 ## Real source fixes applied directly (not shims)
 

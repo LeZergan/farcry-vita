@@ -14,6 +14,10 @@
 #include "RenderPCH.h"
 #include "NULL_Renderer.h"
 
+#if defined(LINUX)
+#include <vitaGL.h>
+#endif
+
 // init memory pool usage
 #ifndef PS2
 #ifndef _XBOX
@@ -63,6 +67,14 @@ void CNULLRenderer::CheckError(const char *comment)
 //////////////////////////////////////////////////////////////////////
 void CNULLRenderer::BeginFrame()
 {
+#if defined(LINUX)
+	/* Vita: real frame clear via vitaGL. Everything else in this file
+	   stays a no-op (no real geometry/texture/shader pipeline exists
+	   yet) -- this and Update()'s swap below are the first genuine
+	   on-screen output from the actual engine, not a standalone test. */
+	glClearColor(0.05f, 0.05f, 0.15f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+#endif
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -79,7 +91,11 @@ void CNULLRenderer::ChangeViewport(unsigned int x,unsigned int y,unsigned int wi
 //////////////////////////////////////////////////////////////////////
 void CNULLRenderer::Update()
 {
-  m_TexMan->Update();    
+  m_TexMan->Update();
+#if defined(LINUX)
+	// Vita: present the frame cleared in BeginFrame() above.
+	vglSwapBuffers(GL_FALSE);
+#endif
 }
 
 void CNULLRenderer::GetMemoryUsage(ICrySizer* Sizer)
