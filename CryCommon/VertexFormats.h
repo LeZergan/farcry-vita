@@ -368,7 +368,20 @@ const int g_VertFormatNormalOffsets[] =
   -1, // VERTEX_FORMAT_P3F_COL4UB_TEX2F_TEX2F=16
 };
 
-static struct SBufInfoTable gBufInfoTable[] = 
+/* These three tables are indexed by vertex format and range-checked only
+   against VERTEX_FORMAT_NUMS, so a wrong length is silently a wrong answer --
+   a single missing comma between two entries both shortens the table and
+   corrupts the entry before it, which is how every skinned-character UV ended
+   up one byte low.  Make the length a compile-time requirement instead of
+   something to be discovered from a data abort on another architecture. */
+typedef char VertFormatUVOffsets_LengthCheck[
+	(sizeof(g_VertFormatUVOffsets)/sizeof(g_VertFormatUVOffsets[0])) == VERTEX_FORMAT_NUMS ? 1 : -1];
+typedef char VertFormatRGBAOffsets_LengthCheck[
+	(sizeof(g_VertFormatRGBAOffsets)/sizeof(g_VertFormatRGBAOffsets[0])) == VERTEX_FORMAT_NUMS ? 1 : -1];
+typedef char VertFormatNormalOffsets_LengthCheck[
+	(sizeof(g_VertFormatNormalOffsets)/sizeof(g_VertFormatNormalOffsets[0])) == VERTEX_FORMAT_NUMS ? 1 : -1];
+
+static struct SBufInfoTable gBufInfoTable[] =
 {
   {
     0
