@@ -908,7 +908,18 @@ void CXConsole::Draw()
 
 
     m_pRenderer->SetState(GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA | GS_NODEPTHTEST);
-		m_pRenderer->Draw2dImage(0.0, 0.0, 800.0f, 600.0f, m_nLoadingBackTexID, 0.0f, 1.0f, 1.0f, 0.0f);
+		/* No loading image resolved (SetLoadingImage leaves the id at -1, and it
+		   starts at 0) means this call has no texture to sample, and an
+		   untextured full-screen quad is drawn in the default colour -- opaque
+		   white over the entire display, for the whole load.  Lay down a black
+		   backdrop instead, so the loading text and progress bar still have a
+		   deliberate screen behind them rather than a white one or whatever the
+		   frame happened to be cleared to. */
+		if (m_nLoadingBackTexID > 0)
+			m_pRenderer->Draw2dImage(0.0, 0.0, 800.0f, 600.0f, m_nLoadingBackTexID, 0.0f, 1.0f, 1.0f, 0.0f);
+		else
+			m_pRenderer->Draw2dImage(0.0, 0.0, 800.0f, 600.0f, 0, 0.0f, 1.0f, 1.0f, 0.0f,
+				0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f);
 	  m_pRenderer->Draw2dImage(40, 480, fProgress * (800.0f - 40.0f*2.0f), 13, m_nLoadingBarTexID, fTexProgress0, 1.0f, fTexProgress1, 0.0f);
   }
 
