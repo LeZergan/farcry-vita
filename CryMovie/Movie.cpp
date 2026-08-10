@@ -572,6 +572,20 @@ void CMovieSystem::Update( float dt )
 	dt = max( 0,min(0.5f,dt) );
 
 #if defined(__vita__)
+	/* A playing sequence with a frozen clock is always wrong, whatever the
+	   caller's delta says.  The device log is unambiguous: repeated reports of
+	   "playing 'first_cutscene' t=0.00 ... dt=0.0000" -- the sequence is
+	   updated over and over and its time never moves, so it never reaches the
+	   end of its range, never stops on its own, and holds the camera and the
+	   player's controls until something else ends it.
+	   Advance by a nominal frame instead.  Only applied while something is
+	   actually playing, so an idle movie system still costs nothing, and a real
+	   delta is always preferred when there is one. */
+	if (dt <= 0.0f && !m_playingSequences.empty())
+		dt = 1.0f / 60.0f;
+#endif
+
+#if defined(__vita__)
 	/* A cut scene that "focuses the camera but never stops" is either a sequence
 	   whose time is not advancing or one whose end is never reached.  Those are
 	   very different bugs and look the same on screen, so report the sequence's
