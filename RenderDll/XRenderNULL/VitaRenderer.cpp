@@ -948,34 +948,45 @@ static const float *VitaBuildTerrainTexCoords(const byte *pData, int nVertexForm
 	const float fScale = pTexGenOffsets[2];
 	if (fScale == 0.0f)
 		return NULL;
-	static std::vector<float> s_arrTerrainUVs;
-	/* A sector is drawn as dozens of strip chunks that all share one vertex
-	   buffer and one mapping, so without this the same few thousand
-	   multiply-adds were repeated for every chunk of every sector, every frame.
-	   The inputs fully determine the output, so remember them and rebuild only
-	   when they actually change. */
-	static const byte *s_pLastData = NULL;
-	static int s_nLastVerts = 0;
-	static float s_fLastScale = 0.0f, s_fLastOffU = 0.0f, s_fLastOffV = 0.0f;
-	if (pData == s_pLastData && nNumVerts == s_nLastVerts && fScale == s_fLastScale &&
-		pTexGenOffsets[0] == s_fLastOffU && pTexGenOffsets[1] == s_fLastOffV &&
-		s_arrTerrainUVs.size() == (size_t)nNumVerts * 2)
-		return &s_arrTerrainUVs[0];
-	s_pLastData = pData;
-	s_nLastVerts = nNumVerts;
-	s_fLastScale = fScale;
-	s_fLastOffU = pTexGenOffsets[0];
-	s_fLastOffV = pTexGenOffsets[1];
+	/* Cache per vertex buffer, not globally.  A sector is drawn as dozens of
+	   strip chunks sharing one buffer and one mapping, and ~30 sectors are
+	   visible at once -- so a single remembered result is missed by every
+	   sector in turn and the whole thing is rebuilt on each one, every frame.
+	   Direct-mapped on the buffer address: sector geometry and its offsets only
+	   change on an LOD transition, so in the steady state this is a hit. */
+	struct STerrainUVCacheEntry
+	{
+		const byte *pData;
+		int nVerts;
+		float fScale, fOffU, fOffV;
+		std::vector<float> arrUVs;
+		STerrainUVCacheEntry() : pData(NULL), nVerts(0), fScale(0), fOffU(0), fOffV(0) {}
+	};
+	const int kCacheSlots = 32;
+	static STerrainUVCacheEntry s_arrCache[kCacheSlots];
+	STerrainUVCacheEntry &rEntry =
+		s_arrCache[(((size_t)pData) >> 5) & (kCacheSlots - 1)];
 
-	s_arrTerrainUVs.resize((size_t)nNumVerts * 2);
+	if (rEntry.pData == pData && rEntry.nVerts == nNumVerts && rEntry.fScale == fScale &&
+		rEntry.fOffU == pTexGenOffsets[0] && rEntry.fOffV == pTexGenOffsets[1] &&
+		rEntry.arrUVs.size() == (size_t)nNumVerts * 2)
+		return &rEntry.arrUVs[0];
+
+	rEntry.pData = pData;
+	rEntry.nVerts = nNumVerts;
+	rEntry.fScale = fScale;
+	rEntry.fOffU = pTexGenOffsets[0];
+	rEntry.fOffV = pTexGenOffsets[1];
+	rEntry.arrUVs.resize((size_t)nNumVerts * 2);
+
 	const int nStride = m_VertexSize[nVertexFormat];
 	for (int i = 0; i < nNumVerts; ++i)
 	{
 		const float *pPos = (const float *)(pData + (size_t)i * nStride);
-		s_arrTerrainUVs[(size_t)i * 2 + 0] = pPos[1] * fScale + pTexGenOffsets[0];
-		s_arrTerrainUVs[(size_t)i * 2 + 1] = pPos[0] * fScale + pTexGenOffsets[1];
+		rEntry.arrUVs[(size_t)i * 2 + 0] = pPos[1] * fScale + pTexGenOffsets[0];
+		rEntry.arrUVs[(size_t)i * 2 + 1] = pPos[0] * fScale + pTexGenOffsets[1];
 	}
-	return &s_arrTerrainUVs[0];
+	return &rEntry.arrUVs[0];
 }
 
 /* Attach generated coordinates as a client-side array.  Binding buffer zero

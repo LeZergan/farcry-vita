@@ -43,11 +43,21 @@ void CSectorInfo::SetTextures(bool bMakeUncompressedForEditing)
 		if(!m_bLockTexture)
 		{
 #if defined(LINUX)
-			// Paired with the faster budget refill in CTerrain::DrawVisibleSectors:
-			// several sectors per window instead of two, so the ground reaches its
-			// real resolution in a couple of seconds rather than minutes.
+			/* Paired with the faster budget refill in CTerrain::DrawVisibleSectors:
+			   several sectors per window instead of two, so the ground reaches its
+			   real resolution in seconds rather than minutes.
+
+			   But spend that budget only when there is frame time to spare.  Each
+			   upgrade reads a sector out of cover.ctc and re-uploads its DXT1
+			   blocks, and while the player is moving through the world there is
+			   always another sector wanting one -- so a fixed budget turns into a
+			   permanent per-frame tax exactly when the frame is already full.
+			   Standing still or looking around, the ground sharpens quickly;
+			   under load it simply waits, which is what streaming is for. */
 			if(m_pTerrain->m_nUploadsInFrame>5)
 				return;
+			if(m_pTerrain->m_nUploadsInFrame>0 && GetTimer()->GetFrameTime() > 0.030f)
+				return; // ~33 fps and worse: take the first upload only, then stop
 #else
 			if(m_pTerrain->m_nUploadsInFrame>1)
 				return; // no more than 1 upload per frame
