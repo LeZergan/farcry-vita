@@ -3109,11 +3109,27 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 		   container was already rebuilt this frame. */
 		if (obj && obj->m_pCharInstance)
 		{
-			CLeafBuffer *pVertexContainer = leaf->GetVertexContainer();
-			const bool bForceUpdate = pVertexContainer &&
-				pVertexContainer->m_UpdateFrame == (unsigned)GetFrameID(true);
-			obj->m_pCharInstance->ProcessSkinning(obj->m_Matrix.GetTranslationOLD(),
-				obj->m_Matrix, obj->m_nTemplId, obj->m_nLod, bForceUpdate);
+			/* Once per character per frame, not once per material chunk.  The
+			   desktop pipeline calls this once per object; here EF_AddEf runs for
+			   every render element, and a character submits one per material.
+			   ProcessSkinning's own "already skinned this frame" guard would
+			   absorb the repeats -- except that bForceUpdate deliberately
+			   bypasses that guard, so a forced update would re-skin the whole
+			   mesh once per chunk.  Characters submit their chunks together, so
+			   remembering just the last one caught is enough. */
+			static IDeformableRenderMesh *s_pLastSkinned = NULL;
+			static int s_nLastSkinnedFrame = -1;
+			const int nFrame = GetFrameID(true);
+			if (obj->m_pCharInstance != s_pLastSkinned || nFrame != s_nLastSkinnedFrame)
+			{
+				s_pLastSkinned = obj->m_pCharInstance;
+				s_nLastSkinnedFrame = nFrame;
+				CLeafBuffer *pVertexContainer = leaf->GetVertexContainer();
+				const bool bForceUpdate = pVertexContainer &&
+					pVertexContainer->m_UpdateFrame == (unsigned)nFrame;
+				obj->m_pCharInstance->ProcessSkinning(obj->m_Matrix.GetTranslationOLD(),
+					obj->m_Matrix, obj->m_nTemplId, obj->m_nLod, bForceUpdate);
+			}
 		}
 
 		const char *vitaShaderName = (ef && ef->GetName()) ? ef->GetName() : "";
