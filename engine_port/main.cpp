@@ -308,8 +308,14 @@ int main(int argc, char *argv[]) {
 			{ "e_obj_view_dist_ratio",              "14"   },
 			{ "e_obj_lod_ratio",                    "3"    },
 			{ "e_terrain_lod_ratio",                "3.0"  },
-			// Vegetation: swap to sprites far sooner and drop the smallest props.
-			{ "e_vegetation_sprites_distance_ratio","0.22" },
+			/* Vegetation.  The sprite distance was pushed down to 0.22 chasing
+			   frame rate, and that is too far: a tree swapped to a billboard
+			   while it is still close reads as a flat brown slab standing in the
+			   world, which is what the large angular shapes in the foreground
+			   are.  Back to a value where the swap happens at a distance the
+			   billboard can actually pass for a tree -- the frame budget can
+			   afford it now that it sits at 55-60 rather than 26. */
+			{ "e_vegetation_sprites_distance_ratio","0.6"  },
 			{ "e_vegetation_min_size",              "2.5"  },
 			// Whole subsystems the hardware cannot afford.
 			{ "e_detail_objects",                   "0"    },
