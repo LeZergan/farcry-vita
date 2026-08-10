@@ -917,6 +917,54 @@ static void SetupVertexArraysForFormat(const byte *pBase, int nVertexFormat)
 	}
 }
 
+/* Terrain sector vertices (VERTEX_FORMAT_P3F_N_COL4UB_COL4UB) carry no texture
+   coordinates at all -- the retail terrain shader derives them from world
+   position using the three "texgen offset" floats the 3D engine hangs off the
+   render element (terrain_render.cpp sets them; CSectorInfo::UpdateVarBuffer
+   points pRE->m_CustomData at them).  There is no shader here to do that, and
+   SetupVertexArraysForFormat disables GL_TEXTURE_COORD_ARRAY when the format has
+   no OffsTC -- so every terrain vertex sampled the one constant default
+   coordinate, giving the whole world a single flat colour out of the sector
+   texture.  That is the white terrain.
+
+   Rebuild the same mapping on the CPU: u from Y, v from X, both scaled by
+   offsets[2] and biased by offsets[0]/[1], matching the ordering the engine
+   writes them in.  The array is regenerated per draw into a reused buffer,
+   which costs a couple of thousand multiply-adds against a draw that is already
+   pushing that many vertices. */
+static const float *VitaBuildTerrainTexCoords(const byte *pData, int nVertexFormat,
+	int nNumVerts, const float *pTexGenOffsets)
+{
+	if (!pData || !pTexGenOffsets || nNumVerts <= 0)
+		return NULL;
+	const float fScale = pTexGenOffsets[2];
+	if (fScale == 0.0f)
+		return NULL;
+	static std::vector<float> s_arrTerrainUVs;
+	s_arrTerrainUVs.resize((size_t)nNumVerts * 2);
+	const int nStride = m_VertexSize[nVertexFormat];
+	for (int i = 0; i < nNumVerts; ++i)
+	{
+		const float *pPos = (const float *)(pData + (size_t)i * nStride);
+		s_arrTerrainUVs[(size_t)i * 2 + 0] = pPos[1] * fScale + pTexGenOffsets[0];
+		s_arrTerrainUVs[(size_t)i * 2 + 1] = pPos[0] * fScale + pTexGenOffsets[1];
+	}
+	return &s_arrTerrainUVs[0];
+}
+
+/* Attach generated coordinates as a client-side array.  Binding buffer zero
+   first matters: the gl*Pointer call captures whatever GL_ARRAY_BUFFER is bound
+   at the time, so on the VBO path the pointer would otherwise be read as an
+   offset into the vertex buffer object. */
+static void VitaApplyGeneratedTexCoords(const float *pUVs)
+{
+	if (!pUVs)
+		return;
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+	glTexCoordPointer(2, GL_FLOAT, 0, pUVs);
+}
+
 static void TeardownVertexArrays()
 {
 	glDisableClientState(GL_VERTEX_ARRAY);
@@ -1217,12 +1265,20 @@ void CVitaRenderer::DrawBuffer(CVertexBuffer * src, SVertexStream * indicies, in
 			s_nDrawCalls, src->m_vertexformat, numindices, offsindex, prmode, vert_start, vert_stop);
 	/* Prefer real buffer objects; fall back to the client pointers for dynamic
 	   or small meshes, and for anything past the upload budget. */
+	/* Only formats with no coordinates of their own need them synthesised, and
+	   only the terrain hands over texgen offsets to synthesise them from. */
+	const float *pGeneratedUVs = NULL;
+	if (!gBufInfoTable[src->m_vertexformat].OffsTC && mi && mi->pRE && mi->pRE->m_CustomData)
+		pGeneratedUVs = VitaBuildTerrainTexCoords(pData, src->m_vertexformat,
+			src->m_NumVerts, mi->pRE->m_CustomData);
+
 	const bool bGPUResident = EnsureGLVertexBuffer(src) && EnsureGLIndexBuffer(indicies);
 	if (bGPUResident)
 	{
 		glBindBuffer(GL_ARRAY_BUFFER, src->m_nGLVBO);
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indicies->m_nGLIBO);
 		SetupVertexArraysForFormat(NULL, src->m_vertexformat);
+		VitaApplyGeneratedTexCoords(pGeneratedUVs);
 		glDrawElements(PrimTypeToGL(prmode), numindices, GL_UNSIGNED_SHORT,
 			(const void *)(size_t)(offsindex * sizeof(ushort)));
 		TeardownVertexArrays();
@@ -1232,6 +1288,7 @@ void CVitaRenderer::DrawBuffer(CVertexBuffer * src, SVertexStream * indicies, in
 	}
 
 	SetupVertexArraysForFormat(pData, src->m_vertexformat);
+	VitaApplyGeneratedTexCoords(pGeneratedUVs);
 	if (src->m_vertexformat == VERTEX_FORMAT_P3F_COL4UB)
 	{
 		static bool s_reportedColorOnlyDraw = false;
@@ -3327,7 +3384,26 @@ void CVitaRenderer::UpdateTextureInVideoMemory(uint tnum, unsigned char * newdat
 		   always replaces the whole texture, so upload it as a fresh level
 		   rather than risking a partial block update. */
 		const int nSize = ((w + 3) / 4) * ((h + 3) / 4) * nBlockBytes;
+		while (glGetError() != GL_NO_ERROR) {} // discard anything already pending
 		glCompressedTexImage2D(GL_TEXTURE_2D, 0, eCompressedFormat, w, h, 0, nSize, newdata);
+		/* This is the only path that ever fills a terrain sector texture: the
+		   pool creates its slots empty and every sector's content arrives
+		   through here.  If the driver rejects the compressed format the call
+		   fails silently, the slot keeps the blank RGBA image it was created
+		   with, and the terrain draws untextured -- which is white once the
+		   vertex colour carries brightness rather than the old detail mask.
+		   Say so once rather than leaving it to be inferred from the screen. */
+		GLenum eUploadError = glGetError();
+		if (eUploadError != GL_NO_ERROR)
+		{
+			static bool s_bReportedCompressedUploadFail = false;
+			if (!s_bReportedCompressedUploadFail && iLog)
+			{
+				s_bReportedCompressedUploadFail = true;
+				iLog->LogToFile("\001[VITA][TEXUP] compressed upload rejected: fmt=0x%x %dx%d bytes=%d err=0x%x",
+					(unsigned)eCompressedFormat, w, h, nSize, (unsigned)eUploadError);
+			}
+		}
 	}
 	else
 		glTexSubImage2D(GL_TEXTURE_2D, 0, posx, posy, w, h, GL_RGBA, GL_UNSIGNED_BYTE, newdata);
