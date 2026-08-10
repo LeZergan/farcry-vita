@@ -1231,11 +1231,28 @@ void CEntity::UpdateCharacters( SEntityUpdateContext &ctx )
 	}
 	else
 	{
+		/* Not visible: advance the animation but leave the bones alone.  That is
+		   the right trade normally, but it can deadlock.  m_bVisible comes from
+		   m_nLastVisibleFrameID, which CEntity::Render only refreshes for an
+		   entity that passed its bounding-box frustum test -- and that bounding
+		   box is recomputed from the bones.  So a character whose bones stop
+		   updating keeps a stale box, the stale box keeps failing the frustum
+		   test, and it is never marked visible again: bones frozen for good, in
+		   bind pose, even after it comes back into view.
+
+		   Break the cycle by letting the bones update occasionally anyway, which
+		   is enough to refresh the box and let the entity be seen again.  Spread
+		   across entities by id so the cost never lands on one frame. */
+		const bool bRefreshStaleBBox =
+			((ctx.nFrameID + (int)(INT_PTR)this) & 31) == 0;
 		for(int k = 0; k < m_nMaxCharNum; k++)
 		{
 			if(m_pCryCharInstance[k] && (m_pCryCharInstance[k]->GetFlags() & CS_FLAG_UPDATE))
-				m_pCryCharInstance[k]->Update( m_center,m_fRadius, ICryCharInstance::flagDontUpdateBones);
+				m_pCryCharInstance[k]->Update( m_center,m_fRadius,
+					bRefreshStaleBBox ? 0 : ICryCharInstance::flagDontUpdateBones);
 		}
+		if (bRefreshStaleBBox)
+			m_bRecalcBBox = true;
 	}
 
 	if(bProcess)
