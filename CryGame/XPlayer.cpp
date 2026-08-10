@@ -734,6 +734,25 @@ void CPlayer::UpdateDead( SPlayerUpdateContext &ctx )
 
 	if (m_bFirstPerson)
 	{
+#if defined(__vita__)
+		/* Apply the first-person view mode for the local player when it first
+		   takes effect.  SetViewMode(false) is what issues DrawCharacter(0,0),
+		   i.e. "stop drawing the player's body", and it is otherwise only
+		   reached from a save-game restore or a manual view toggle -- never on
+		   a level started fresh.  So the camera sat in first person while the
+		   full body was still drawn around it, which is why you could see the
+		   inside of the character's head.  Applied on transition, not per
+		   frame; DrawCharacter is not free. */
+		if (IsMyPlayer())
+		{
+			static bool s_bFirstPersonApplied = false;
+			if (!s_bFirstPersonApplied)
+			{
+				s_bFirstPersonApplied = true;
+				SetViewMode(false);
+			}
+		}
+#endif
 		m_pEntity->SetRegisterInSectors(false);
 		UpdateFirstPersonView();
 	}

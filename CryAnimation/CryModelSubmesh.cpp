@@ -1112,13 +1112,12 @@ void CryModelSubmesh::ProcessSkinning(const Vec3& t, const Matrix44& mtxModel, i
 	bool bNeedVertices = true;
 
 	CLeafBuffer *lb = m_pLeafBuffers[nLod];
-	/* The two asserts below are the only thing standing between a missing LOD
-	   buffer or an unshaded material and a null dereference.  On Windows that
-	   is a debug break; here assert() is compiled down to a printf that carries
-	   on into the dereference, and materials without a shader genuinely occur
-	   on this port.  Since the render pipeline now calls this for every
-	   character it draws, bail out instead -- an unskinned character is a bad
-	   frame, a null dereference is a dead console. */
+	/* The asserts this replaces are the only thing standing between a missing
+	   LOD buffer or an unshaded material and a null dereference.  On Windows
+	   that is a debug break; here assert() compiles to a printf that carries on
+	   into the dereference, and materials with no shader genuinely occur on this
+	   port (the renderer logs them as [VITA][MATWHITE]).  The render pipeline
+	   now calls this for every character drawn, so it has to be safe. */
 	if (!lb || !lb->m_pMats)
 		return;
 
@@ -1129,13 +1128,16 @@ void CryModelSubmesh::ProcessSkinning(const Vec3& t, const Matrix44& mtxModel, i
 		if (si.m_pShader)
 			break;
 	}
-	if (!si.m_pShader)
-		return;
-	IShader *ef;
-	ef = si.m_pShader->GetTemplate(nTemplate);
+	/* Missing shader means skip the shader lookup -- NOT skip the skinning.
+	   Bailing out here left every character whose materials never resolved a
+	   shader frozen in bind pose, which is the handful that carried on
+	   T-posing after skinning started working for everyone else.  The shader is
+	   only consulted for the tangent and normal flags below, and both already
+	   handle a null template; vertices are always needed. */
+	IShader *ef = si.m_pShader ? si.m_pShader->GetTemplate(nTemplate) : NULL;
 
 #ifdef _DEBUG
-	bool bAllowToCopyIntoVideoBufferDirectly = ((ef->GetFlags3() & EF3_NEEDSYSBUF) == 0);
+	bool bAllowToCopyIntoVideoBufferDirectly = ef && ((ef->GetFlags3() & EF3_NEEDSYSBUF) == 0);
 #endif
 
 	bool bShowNormals  = g_GetCVars()->r_ShowNormals() != 0;
