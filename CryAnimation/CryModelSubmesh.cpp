@@ -130,9 +130,19 @@ void CryModelSubmesh::DeleteLeafBuffers()
 			{
 				CMatInfo *tmp = pMats->Get(m);
 				SAFE_RELEASE(tmp->pRE);
-				SShaderItem Sh = tmp->GetShaderItem();
-				SAFE_RELEASE(Sh.m_pShader);
-				SAFE_RELEASE(Sh.m_pShaderResources);
+				/* GetShaderItem() hands back a const reference, so "SShaderItem Sh = ..."
+				   copies it and SAFE_RELEASE only clears the copy -- the material keeps
+				   pointing at the objects it just dropped a reference to.  DeleteLeafBuffer()
+				   two lines below destroys the leaf buffer, and ~CLeafBuffer releases the very
+				   same shader and shader resources again, so every character teardown released
+				   twice.  With one AddRef per CopyTo'd instance that drives the refcount to
+				   zero one instance early: the resources are freed while the model still owns
+				   them, and the next teardown calls Release() through a freelist pointer
+				   sitting where the vtable used to be (prefetch abort at a heap address).
+				   Release through the material itself so the pointers are actually nulled and
+				   the destructor skips them. */
+				SAFE_RELEASE(tmp->shaderItem.m_pShader);
+				SAFE_RELEASE(tmp->shaderItem.m_pShaderResources);
 			}
 
 			// during GenerateRenderArrays, we allocate this
@@ -357,6 +367,35 @@ void CryModelSubmesh::AddCurrentRenderData(CCObject *obj, CCObject *obj1, const 
 		//obj->m_ObjFlags |= FOB_REFRACTED; // moved from Game01
 	}
 	CLeafBuffer* pLeafBuffer = m_pLeafBuffers[nLod];
+	/* Every path below indexes the material list without checking it, and
+	   m_pMats->size() on a null list is what killed the first character to
+	   reach the renderer.  But simply bailing makes the character disappear,
+	   and only the selected LOD is usually missing -- so drop to LOD 0, which
+	   is always the one built first, before giving up entirely. */
+	if ((!pLeafBuffer || !pLeafBuffer->m_pMats) && nLod != 0)
+	{
+		pLeafBuffer = m_pLeafBuffers[0];
+		nLod = 0;
+		obj->m_nLod = 0;
+		if (obj1)
+			obj1->m_nLod = 0;
+	}
+	if (!pLeafBuffer || !pLeafBuffer->m_pMats)
+	{
+		/* Name the model and count how many are affected -- "some character is
+		   invisible" is not actionable, "these five .ccg files have no leaf
+		   buffer" is. */
+		static std::map<std::string, int> s_arrMissingMats;
+		const char *szFile = m_pMesh ? m_pMesh->getFilePathCStr() : NULL;
+		const std::string sKey = (szFile && szFile[0]) ? szFile : "<unnamed>";
+		if (s_arrMissingMats.find(sKey) == s_arrMissingMats.end() && s_arrMissingMats.size() < 48)
+		{
+			s_arrMissingMats[sKey] = 1;
+			g_GetLog()->LogToFile("\001[VITA][CHAR] no material list at any LOD, not drawn: %s (lodRequested=%d)",
+				sKey.c_str(), nLod);
+		}
+		return;
+	}
 	pLeafBuffer->m_vBoxMin = m_SubBBox.vMin;
 	pLeafBuffer->m_vBoxMax = m_SubBBox.vMax;
 
@@ -384,8 +423,11 @@ void CryModelSubmesh::AddCurrentRenderData(CCObject *obj, CCObject *obj1, const 
 				int nTempl = rParams.nShaderTemplate;
 				if (nTempl == -2)
 				{
-					nTempl = getShaderTemplates(0)[i];
-					nTempl1 = getShaderTemplates(1)[i];
+					// Sized only when materials loaded; fall back to "no template"
+					// rather than indexing past the end (see the same guard in
+					// SetShaderTemplateName).
+					nTempl  = i < getShaderTemplates(0).size() ? getShaderTemplates(0)[i] : -1;
+					nTempl1 = i < getShaderTemplates(1).size() ? getShaderTemplates(1)[i] : -1;
 				}
 				else
 					if (rParams.nShaderTemplate > 0)
@@ -407,6 +449,12 @@ void CryModelSubmesh::AddCurrentRenderData(CCObject *obj, CCObject *obj1, const 
 		for (unsigned nPrimGroup=0; nPrimGroup<pGeomInfo->m_arrPrimGroups.size(); nPrimGroup++)
 		{ 
 			unsigned nMaterial = pGeomInfo->m_arrPrimGroups[nPrimGroup].nMaterial;
+			/* CCG primitive groups map to material slots; they are not themselves
+			   material slots. Some retail characters contain several groups using
+			   the same material, so indexing per-material shader-template arrays by
+			   nPrimGroup reads past list2 and floods Vita with asserts. */
+			if (!pLeafBuffer->m_pMats || nMaterial >= (unsigned)pLeafBuffer->m_pMats->size())
+				continue;
 			CMatInfo& mi = (*pLeafBuffer->m_pMats)[nMaterial];
 			CREOcLeaf * pREOcLeaf  = mi.pRE;
 			SShaderItem si = mi.shaderItem;//m_pMesh->getShader(nMaterial);
@@ -423,7 +471,8 @@ void CryModelSubmesh::AddCurrentRenderData(CCObject *obj, CCObject *obj1, const 
 				}
 			}
 
-			assert (nPrimGroup<(unsigned)pLeafBuffer->m_pMats->size() && pREOcLeaf);
+			if (!pREOcLeaf)
+				continue;
 
 			if (si.m_pShader)
 			{
@@ -431,8 +480,8 @@ void CryModelSubmesh::AddCurrentRenderData(CCObject *obj, CCObject *obj1, const 
 				int nTempl = rParams.nShaderTemplate;
 				if (nTempl == -2)
 				{
-					nTempl  = getShaderTemplates(0)[nPrimGroup];
-					nTempl1 = getShaderTemplates(1)[nPrimGroup];
+					nTempl  = nMaterial < getShaderTemplates(0).size() ? getShaderTemplates(0)[nMaterial] : -1;
+					nTempl1 = nMaterial < getShaderTemplates(1).size() ? getShaderTemplates(1)[nMaterial] : -1;
 				}
 				else
 					if (rParams.nShaderTemplate > 0)
@@ -1400,7 +1449,12 @@ void CryModelSubmesh::Render(const struct SRendParams & RendParams, Matrix44& mt
 	}
 
   CCObject * pObj1 = NULL;
-  if (getShaderTemplates(1)[0] > 0)
+  /* getShaderTemplates(1) is only sized when the submesh actually loaded
+     materials; on an empty array operator[] indexes a null pointer.  The same
+     access is already guarded by a size() check where the templates are read
+     per material (see SetShaderTemplateName), so guard it here too -- with no
+     templates there is no second pass to build. */
+  if (getShaderTemplates(1).size() > 0 && getShaderTemplates(1)[0] > 0)
   {
     pObj1 = g_GetIRenderer()->EF_GetObject(true);
     pObj1->CloneObject(pObj);
