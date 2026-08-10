@@ -745,10 +745,17 @@ void CPlayer::UpdateDead( SPlayerUpdateContext &ctx )
 	   while in a vehicle, where third person is the intended view. */
 	if (IsMyPlayer() && !m_pVehicle)
 	{
-		static bool s_bForcedFirstPerson = false;
-		if (!s_bForcedFirstPerson)
+		/* Keyed to the player instance, not a plain one-shot.  A bare static bool
+		   latches for the lifetime of the process, so if it fired once for an
+		   earlier player -- during the menu, or a previous level -- the player
+		   you are actually controlling never got it, and kept the third-person
+		   camera sitting inside his own head.  Re-applying for each new player
+		   instance fixes that while still leaving the dev-mode view toggle and
+		   the vehicle camera free to change it afterwards. */
+		static const CPlayer *s_pLastForcedFirstPerson = NULL;
+		if (s_pLastForcedFirstPerson != this)
 		{
-			s_bForcedFirstPerson = true;
+			s_pLastForcedFirstPerson = this;
 			m_bFirstPerson = true;
 			SetViewMode(false);
 		}

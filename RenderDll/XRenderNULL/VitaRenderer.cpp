@@ -3096,10 +3096,16 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 		   geometry that was never submitted, and guessing between those two
 		   has cost several round trips already. */
 		{
+			/* Construct the key only while the report can still fire.  This is
+			   EF_AddEf: it runs for every render element of every object, every
+			   frame, and building (then hashing, then discarding) a std::string
+			   on each one just to learn the cap was reached long ago is pure
+			   overhead in the busiest function in the renderer. */
 			static std::map<std::string, bool> s_reportedSubmit;
+			if (iLog && s_reportedSubmit.size() < 96)
+			{
 			const std::string src = (leaf && leaf->m_sSource) ? leaf->m_sSource : "<null-leaf>";
-			if (iLog && s_reportedSubmit.size() < 96 &&
-				s_reportedSubmit.find(src) == s_reportedSubmit.end())
+			if (s_reportedSubmit.find(src) == s_reportedSubmit.end())
 			{
 				s_reportedSubmit[src] = true;
 				iLog->LogToFile("\001[VITA][SUBMIT] %s vb=%s inds=%d dyn=%d shader=%s",
@@ -3108,6 +3114,7 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 					chunk ? chunk->nNumIndices : -1,
 					(leaf && leaf->m_pVertexBuffer) ? (int)leaf->m_pVertexBuffer->m_bDynamic : -1,
 					(ef && ef->GetName()) ? ef->GetName() : "<null>");
+			}
 			}
 		}
 
@@ -3191,11 +3198,18 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 			const bool bAdditive = (sr->m_ResFlags & MTLFLAG_ADDITIVE) != 0;
 			if (bAdditive)
 			{
-				renderState &= ~GS_DEPTHWRITE;
 				renderState |= (GS_BLSRC_ONE | GS_BLDST_ONE);
 				// A black source contributes nothing under additive blending, so an
 				// alpha test would only punch holes in the parts that do glow.
 				renderState &= ~GS_ALPHATEST_MASK;
+				/* Give up the depth write only for surfaces that are genuinely
+				   translucent.  Clearing it for every additive material stopped a
+				   whole class of solid geometry writing depth, and anything behind
+				   it then drew straight over the top -- objects visible through
+				   walls.  An opaque additive surface writing depth costs nothing
+				   visually, because black adds nothing either way. */
+				if (sr->m_Opacity < 0.999f)
+					renderState &= ~GS_DEPTHWRITE;
 			}
 			else if (sr->m_Opacity < 0.999f)
 			{
