@@ -336,7 +336,29 @@ int CUIVideoPanel::LoadVideo(const string &szFileName, bool bSound)
 	ReleaseVideo();
 
 	m_szVideoFile = szFileName;
-	m_VitaBink = Bink_Open(szFileName.c_str());
+
+	/* Resolve to an absolute device path before opening.  The scripts build
+	   these as "./languages/movies/<lang>/<name>.bik" -- UI.szCutSceneDrive is
+	   "./" and the folder is relative (UISystemCfg.lua).  main() does chdir to
+	   the data root, but the Vita's file layer does not resolve relative paths
+	   against a working directory the way the desktop CRT does, so the open
+	   fails and the panel covers the screen with nothing.  The videos are
+	   present -- ux0:data/farcry/languages/Movies/Russian/training_begin.bik is
+	   82 MB on the device -- so this is purely path resolution.
+
+	   Resolved once and opened once, deliberately: libbinkdec allocates from a
+	   fixed instance pool and a failed open still consumes a slot, so probing
+	   candidate paths in a loop exhausts the pool and takes the app down (see
+	   the note at the top of this file). */
+	string szResolved = szFileName;
+	if (szResolved.size() > 2 && szResolved[0] == '.' &&
+		(szResolved[1] == '/' || szResolved[1] == '\\'))
+		szResolved = szResolved.substr(2);
+	if (szResolved.find(':') == string::npos)
+		szResolved = string("ux0:data/farcry/") + szResolved;
+	m_szVideoFile = szResolved;
+
+	m_VitaBink = Bink_Open(szResolved.c_str());
 	if (!m_VitaBink.isValid)
 	{
 		// Missing or unreadable: the normal unsupported-media contract. Do not
