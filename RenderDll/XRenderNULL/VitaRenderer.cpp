@@ -1771,11 +1771,14 @@ void CVitaRenderer::FontSetRenderingState(unsigned long nVirtualScreenWidth, uns
 void CVitaRenderer::FontSetBlending(int src, int dst)
 {
 #if defined(LINUX)
-	/* Vita: src/dst are CryEngine's GS_BLSRC_x / GS_BLDST_x flags (see
-	   CryCommon/IRenderer.h); CFFont almost always passes the default
-	   src-alpha/one-minus-src-alpha pair already set by
-	   FontSetRenderingState above, so a full flag-to-GLenum mapping
-	   isn't needed for legible text yet -- left as a follow-up. */
+	/* Deliberately empty, and not a gap to fill later: CD3D9Renderer and
+	   CGLRenderer both define this as an empty function too (D3DFont.cpp,
+	   GLFont.cpp).  Fonts render with the src-alpha/one-minus-src-alpha pair
+	   FontSetRenderingState sets above, and CFFont's per-pass request is
+	   ignored on every shipping backend.  Note the arguments are
+	   CFFont::eBlendMode values (FFont.h), not the GS_BLSRC_x / GS_BLDST_x
+	   flags SetState takes -- mapping them through GSBlendSrcToGL would be
+	   wrong as well as unnecessary. */
 #endif
 }
 void CVitaRenderer::FontRestoreRenderingState()
