@@ -55,6 +55,18 @@ CUIVideoPanel::CUIVideoPanel()
    candidates exhausts the pool and takes the whole app down.  Resolve the path
    before opening, and open exactly once. */
 
+#include <dirent.h>
+#include <sys/stat.h>
+
+//! Cheap existence test used to locate a video before opening it.  Deliberately
+//! not Bink_Open: a failed open still consumes one of libbinkdec's fixed
+//! instance-pool slots, so searching with it exhausts the pool.
+static bool VitaFileExists(const char *szPath)
+{
+	struct stat st;
+	return szPath && stat(szPath, &st) == 0;
+}
+
 //! Bink hands frames back as planar YUV with the chroma planes at half
 //! resolution; the renderer wants packed RGBA, so convert as we copy.
 static void VitaBinkYUVToRGBA(const YUVbuffer yuv, int *pDest, int width, int height)
@@ -356,6 +368,50 @@ int CUIVideoPanel::LoadVideo(const string &szFileName, bool bSound)
 		szResolved = szResolved.substr(2);
 	if (szResolved.find(':') == string::npos)
 		szResolved = string("ux0:data/farcry/") + szResolved;
+
+	/* Find the language folder that is actually installed.  The scripts build
+	   the path from g_language, which resolves to "english" here, but this
+	   install ships only languages/Movies/Russian -- so the open failed on
+	   ".../movies/english/Governmental_Message.bik" while the file sat in
+	   .../Movies/Russian.  Rather than hard-code a language, look for the
+	   basename in whichever subdirectories of languages/Movies exist.
+
+	   Probing with stat() is safe; probing with Bink_Open is not.  libbinkdec
+	   allocates from a fixed instance pool and a failed open still consumes a
+	   slot, so the search happens entirely on the filesystem and Bink_Open is
+	   still called exactly once, on the winner. */
+	if (!VitaFileExists(szResolved.c_str()))
+	{
+		const size_t nSlash = szResolved.find_last_of('/');
+		if (nSlash != string::npos)
+		{
+			const string szBase = szResolved.substr(nSlash + 1);
+			static const char *kMovieRoots[] = {
+				"ux0:data/farcry/languages/Movies/",
+				"ux0:data/farcry/languages/movies/"
+			};
+			bool bFound = false;
+			for (int nRoot = 0; nRoot < 2 && !bFound; ++nRoot)
+			{
+				DIR *pDir = opendir(kMovieRoots[nRoot]);
+				if (!pDir)
+					continue;
+				while (struct dirent *pEntry = readdir(pDir))
+				{
+					if (pEntry->d_name[0] == '.')
+						continue;
+					string szTry = string(kMovieRoots[nRoot]) + pEntry->d_name + "/" + szBase;
+					if (VitaFileExists(szTry.c_str()))
+					{
+						szResolved = szTry;
+						bFound = true;
+						break;
+					}
+				}
+				closedir(pDir);
+			}
+		}
+	}
 	m_szVideoFile = szResolved;
 
 	m_VitaBink = Bink_Open(szResolved.c_str());
