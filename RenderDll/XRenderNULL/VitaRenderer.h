@@ -333,6 +333,13 @@ private:
 	   a missing texture re-runs the whole candidate-path search and its failed
 	   CryPak opens on every draw, every frame, for the life of the level. */
 	std::set<std::string> m_FailedTextureNames;
+	/* Material diffuses whose whole lazy-load search -- the name as authored and
+	   the material-folder fallback built from it -- has already come back empty.
+	   Keyed on both, because either one alone can succeed where the other fails.
+	   Without it a missing diffuse spends one of the per-frame lazy-load slots
+	   on every frame for the life of the level, and the geometry that was
+	   waiting behind it in the queue never gets drawn at all. */
+	std::set<std::string> m_LazyDiffuseGaveUp;
 	std::map<std::string, CVitaShader *> m_ShaderByName;
 	int m_nNextShaderId;
 

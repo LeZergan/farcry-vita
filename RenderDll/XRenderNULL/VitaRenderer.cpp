@@ -582,10 +582,26 @@ void CVitaRenderer::PostLoad()
    draw call.  That is a file read, a decompress and a full mip-chain upload
    happening in the middle of a frame, and a fresh view can need dozens at
    once -- a visible stall rather than a hitch.  Cap how many may be loaded per
-   frame: anything over budget draws white for that frame and is picked up on
-   the next, so the cost spreads instead of spiking. */
+   frame: anything over budget is left out for that frame and is picked up on
+   the next, so the cost spreads instead of spiking.
+
+   The budget follows the backlog instead of being a flat two per frame.  A flat
+   two is what made the world assemble itself in front of the player after a
+   level load: a fresh view references hundreds of distinct materials, every
+   chunk whose diffuse has not arrived yet is skipped entirely, and at two loads
+   a frame that takes the best part of two hundred frames.  Geometry appears a
+   piece at a time, and because which chunks are drawn depends on view order,
+   pieces that were visible drop out again as the camera turns -- the assets
+   flashing after a load.  Sizing the allowance from how many chunks actually
+   went without last frame clears that backlog in a handful of frames and then
+   costs nothing at all, because once everything in view is resolved the backlog
+   is zero and the budget falls back to the minimum. */
 static int g_nLazyTextureLoadsThisFrame = 0;
-static const int kMaxLazyTextureLoadsPerFrame = 2;
+static int g_nChunksWaitingOnTextureLastFrame = 0;
+static int g_nChunksWaitingOnTextureThisFrame = 0;
+static int g_nLazyTextureBudgetThisFrame = 2;
+static const int kMinLazyTextureLoadsPerFrame = 2;
+static const int kMaxLazyTextureLoadsPerFrame = 16;
 
 void CVitaRenderer::BeginFrame()
 {
@@ -597,6 +613,12 @@ void CVitaRenderer::BeginFrame()
 	++m_nFrameId;
 	m_nDynVBCursor = 0;
 	g_nLazyTextureLoadsThisFrame = 0;
+	g_nChunksWaitingOnTextureLastFrame = g_nChunksWaitingOnTextureThisFrame;
+	g_nChunksWaitingOnTextureThisFrame = 0;
+	g_nLazyTextureBudgetThisFrame =
+		kMinLazyTextureLoadsPerFrame + g_nChunksWaitingOnTextureLastFrame;
+	if (g_nLazyTextureBudgetThisFrame > kMaxLazyTextureLoadsPerFrame)
+		g_nLazyTextureBudgetThisFrame = kMaxLazyTextureLoadsPerFrame;
 	glViewport(m_nViewportX, m_nViewportY, m_nViewportWidth, m_nViewportHeight);
 	glDepthMask(GL_TRUE);
 	glClearColor(m_vClearColor.x, m_vClearColor.y, m_vClearColor.z, 1.0f);
@@ -1638,6 +1660,15 @@ void CVitaRenderer::Draw2dImage(float xpos, float ypos, float w, float h, int te
 	   contract.  DDS and the rest of the retail UI use a top-left image
 	   origin, so both original backends submit (1-t), not t, even though the
 	   screen-space projection itself also has y increasing downwards. */
+	/* A texture that failed to load is -1, not 0, and drawing it as an
+	   untextured quad paints it solid white at whatever size was asked for.
+	   The loading screen asks for a full-screen one, so a loading image that
+	   could not be resolved covered the whole display in white rather than
+	   simply not appearing.  Zero still means "no texture, use the colour" --
+	   that is how the letterbox bars and other solid fills are drawn -- but a
+	   negative id is a failed load and has nothing to draw. */
+	if (texture_id < 0)
+		return;
 	/* Far Cry's 2D API is authored in a virtual 800x600 canvas.  This is
 	   copied from the real Crytek OpenGL backend's Draw2dImage contract. */
 	xpos = ScaleCoordX(xpos);
@@ -3335,8 +3366,30 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 		SetState(renderState);
 
 		SEfResTexture *diffuse = sr ? sr->m_Textures[EFTT_DIFFUSE] : NULL;
-		if (diffuse && !diffuse->m_TU.m_ITexPic && !diffuse->m_Name.empty() &&
-			g_nLazyTextureLoadsThisFrame < kMaxLazyTextureLoadsPerFrame)
+		/* A diffuse that has already been searched for and not found must not
+		   come back here every frame.  The budget above was spent on those first
+		   -- the load is attempted, fails, m_ITexPic stays null, and the whole
+		   thing repeats on the next frame, forever.  Two absent textures in view
+		   were therefore enough to consume the entire per-frame allowance on
+		   nothing, which left every chunk whose texture WOULD have loaded stuck
+		   in the skip path below permanently: geometry that never appears, and
+		   geometry that appears and vanishes again as view order shifts which
+		   chunks reach the front of the queue.  Record the ones that have been
+		   given up on -- keyed on both halves of what the search actually uses,
+		   since the fallback below composes the material's own folder with the
+		   name -- and let them fall straight through to the untextured draw. */
+		const bool bDiffusePending = diffuse && !diffuse->m_TU.m_ITexPic && !diffuse->m_Name.empty();
+		std::string szGaveUpKey;
+		bool bDiffuseGivenUp = false;
+		if (bDiffusePending)
+		{
+			szGaveUpKey = sr->m_TexturePath.c_str();
+			szGaveUpKey += '|';
+			szGaveUpKey += diffuse->m_Name.c_str();
+			bDiffuseGivenUp = m_LazyDiffuseGaveUp.find(szGaveUpKey) != m_LazyDiffuseGaveUp.end();
+		}
+		if (bDiffusePending && !bDiffuseGivenUp &&
+			g_nLazyTextureLoadsThisFrame < g_nLazyTextureBudgetThisFrame)
 		{
 			++g_nLazyTextureLoadsThisFrame;
 			std::string textureName = diffuse->m_Name.c_str();
@@ -3371,16 +3424,19 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 				}
 			}
 			diffuse->m_TU.m_ITexPic = loaded;
+			if (!loaded)
+				m_LazyDiffuseGaveUp.insert(szGaveUpKey);
 		}
-		else if (diffuse && !diffuse->m_TU.m_ITexPic && !diffuse->m_Name.empty() &&
-			!IsTextureKnownMissing(diffuse->m_Name.c_str()))
+		else if (bDiffusePending && !bDiffuseGivenUp)
 		{
 			/* Its load was pushed to a later frame by the budget above.  Drawing
 			   it now would paint the surface solid white until the texture
 			   arrives, which is the white flashing seen while moving -- leave
 			   the chunk out for a frame instead and let it appear textured.
-			   Textures already proven absent are excluded, or those surfaces
-			   would never be drawn at all. */
+			   Count it, so next frame's budget is sized to clear the backlog
+			   rather than trickling through it.  Textures already given up on are
+			   excluded, or those surfaces would never be drawn at all. */
+			++g_nChunksWaitingOnTextureThisFrame;
 			return;
 		}
 		if (diffuse && diffuse->m_TU.m_ITexPic)
