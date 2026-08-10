@@ -908,18 +908,27 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 	   cut-scene cvars (es_UpdatePhysics / ai_systemupdate) left switched off by
 	   a BeginCutScene whose EndCutScene never came. */
 	{
-		static float s_fNextFrameReport = 0.0f;
-		float fNow = m_Time.GetCurrTime();
-		if (fNow >= s_fNextFrameReport)
+		/* Count frames rather than comparing against GetCurrTime(): the timer is
+		   reset during level load, so a "next report at now+1s" deadline latched
+		   before the load never comes due again afterwards -- which is exactly
+		   how the first instrumented run lost every in-game frame. */
+		static unsigned s_nFrameReportCounter = 0;
+		if ((s_nFrameReportCounter++ % 30) == 0)
 		{
-			s_fNextFrameReport = fNow + 1.0f;
+			float fNow = m_Time.GetCurrTime();
 			ICVar *pPhys   = m_pConsole ? m_pConsole->GetCVar("es_UpdatePhysics") : NULL;
 			ICVar *pAIUpd  = m_pConsole ? m_pConsole->GetCVar("ai_systemupdate") : NULL;
 			ICVar *pHud    = m_pConsole ? m_pConsole->GetCVar("cl_display_hud") : NULL;
+			/* pProcess's flags are half of CXGame::IsInPause -- PROC_MENU there
+			   forces nPauseMode 1, which skips physics, AI and the whole entity
+			   update.  The other half is CXGame::m_bMenuOverlay, and the two are
+			   cleared together by MenuOff(), so a PROC_MENU still set after the
+			   level is in is the thing to look for. */
 			if (m_pLog)
-				m_pLog->LogToFile("\001[VITA][FRAME] dt=%.5f t=%.2f pause=%d noUpd=%d flags=0x%x "
+				m_pLog->LogToFile("\001[VITA][FRAME] dt=%.5f t=%.2f pause=%d noUpd=%d flags=0x%x proc=0x%x "
 					"es_UpdatePhysics=%d ai_systemupdate=%d cl_display_hud=%d",
 					fFrameTime, fNow, nPauseMode, bNoUpdate ? 1 : 0, (unsigned)updateFlags,
+					(unsigned)pProcess->GetFlags(),
 					pPhys ? pPhys->GetIVal() : -1,
 					pAIUpd ? pAIUpd->GetIVal() : -1,
 					pHud ? pHud->GetIVal() : -1);

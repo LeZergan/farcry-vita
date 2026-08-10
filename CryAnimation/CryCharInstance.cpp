@@ -815,6 +815,26 @@ void CryCharInstance::Update(Vec3d vPos, float fRadius, unsigned uFlags)
 
 	bool update=(nFrameID & nUFM)==(m_pModelState->getInstanceNumber()&nUFM);
 
+#if defined(__vita__)
+	/* Everything rendering in bind pose has two quite different causes and this
+	   tells them apart: no animation layers at all means nothing ever started an
+	   animation (the .cal never resolved, or the game/AI never asked), whereas
+	   layers present with the pose still frozen means the update is being
+	   skipped or the skinning is not applying it.  nUFM 7 is the
+	   "don't update bones" bucket, which the camera position and frustum decide,
+	   so print those inputs too. */
+	{
+		static unsigned s_nAnimReportCounter = 0;
+		if ((s_nAnimReportCounter++ % 600) == 0)
+			g_GetLog()->LogToFile("\001[VITA][ANIM] layers=%u frameTime=%.4f nFrameID=%d nUFM=%d update=%d inst=%d "
+				"radius=%.2f pos=(%.1f %.1f %.1f) cam=(%.1f %.1f %.1f)",
+				(unsigned)m_pModelState->m_arrAnimationLayers.size(), fFrameTime, nFrameID, nUFM,
+				update ? 1 : 0, m_pModelState->getInstanceNumber(), fRadius,
+				vPos.x, vPos.y, vPos.z,
+				GetViewCamera().GetPos().x, GetViewCamera().GetPos().y, GetViewCamera().GetPos().z);
+	}
+#endif
+
 	//float fColor[4] = {0,1,0,1};
 	//g_pIRenderer->Draw2dLabel( 1,g_YLine, 1.3f, fColor, false,"InstanceNum:%d  nFrameID:%d (%01d %01d) fRadius:%15.10f ",m_pModelState->getInstanceNumber(), nFrameID, update,nUFM, fRadius );	g_YLine+=16.0f;
 	

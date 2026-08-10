@@ -31,11 +31,11 @@ void CSectorInfo::DrawArray(CArrayInfo * pArrayInfo, CCObject * pTerrainCCObject
 	   UpdateVarBuffer passes while m_nTextureID is still zero.  Report the
 	   whole guard once a second for one sector so it is clear which term fails. */
 	{
-		static float s_fNextTerrainReport = 0.0f;
-		float fNow = GetCurTimeSec();
-		if (fNow >= s_fNextTerrainReport)
+		/* Frame-counted, not deadline-based: GetCurTimeSec() is reset by the
+		   level load, which strands any "report again at now+1s" latch. */
+		static unsigned s_nTerrainReportCounter = 0;
+		if ((s_nTerrainReportCounter++ % 240) == 0)
 		{
-			s_fNextTerrainReport = fNow + 1.0f;
 			GetLog()->LogToFile("\001[VITA][TERRAIN] sec=%d texBind=%d texId=%d lowLodId=%d mats=%d re=%d "
 				"lowLodCover=%d texOff2=%.8f invSize=%.8f clientBind=%d",
 				GetSecIndex(), GetCVars()->e_terrain_texture_bind, m_nTextureID, m_nLowLodTextureID,
