@@ -24,6 +24,31 @@ void CSectorInfo::DrawArray(CArrayInfo * pArrayInfo, CCObject * pTerrainCCObject
 {
 	bool bAllowSingePassZ(GetViewCamera().GetFov() < GetCVars()->e_detail_texture_min_fov);
 
+#if defined(LINUX)
+	/* Terrain draws white when nothing ever binds a sector texture.  Every one
+	   of the four conditions below silently skips the bind, and the leaf buffer
+	   then keeps the id it was created with -- which is the 0x1000 placeholder
+	   UpdateVarBuffer passes while m_nTextureID is still zero.  Report the
+	   whole guard once a second for one sector so it is clear which term fails. */
+	{
+		static float s_fNextTerrainReport = 0.0f;
+		float fNow = GetCurTimeSec();
+		if (fNow >= s_fNextTerrainReport)
+		{
+			s_fNextTerrainReport = fNow + 1.0f;
+			GetLog()->LogToFile("\001[VITA][TERRAIN] sec=%d texBind=%d texId=%d lowLodId=%d mats=%d re=%d "
+				"lowLodCover=%d texOff2=%.8f invSize=%.8f clientBind=%d",
+				GetSecIndex(), GetCVars()->e_terrain_texture_bind, m_nTextureID, m_nLowLodTextureID,
+				m_pLeafBuffer && m_pLeafBuffer->m_pMats ? m_pLeafBuffer->m_pMats->Count() : -1,
+				(m_pLeafBuffer && m_pLeafBuffer->m_pMats && m_pLeafBuffer->m_pMats->Count() &&
+					m_pLeafBuffer->m_pMats->GetAt(0).pRE) ? 1 : 0,
+				m_pTerrain->m_pLowLodCoverMapTex ? m_pTerrain->m_pLowLodCoverMapTex->GetTextureID() : -1,
+				m_arrTexOffsets[2], 1.f/CTerrain::GetTerrainSize(),
+				m_pLeafBuffer ? m_pLeafBuffer->m_nClientTextureBindID : -1);
+		}
+	}
+#endif
+
   if(GetCVars()->e_terrain_texture_bind && m_nTextureID && m_pLeafBuffer->m_pMats->Count() && m_pLeafBuffer->m_pMats->GetAt(0).pRE)
   {
 		if(m_arrTexOffsets[2] == 1.f/CTerrain::GetTerrainSize())
@@ -299,6 +324,27 @@ void CSectorInfo::FillBuffer(int nStep)
 			vert.seccolor.bcolor[0] = byte(m_arrDetailTexInfo[5] && m_arrDetailTexInfo[5]->ucThisSurfaceTypeId == ucSurfaceTypeID)*255;
 			vert.seccolor.bcolor[3] = byte(m_arrDetailTexInfo[6] && m_arrDetailTexInfo[6]->ucThisSurfaceTypeId == ucSurfaceTypeID)*255;
 		}
+
+#if defined(LINUX)
+		/* Those RGB bytes are not a colour: they are per-layer detail-texture
+		   masks (0 or 255 depending on which detail surface this vertex
+		   belongs to), and the real terrain brightness is packed into alpha.
+		   Retail unpacks that in a shader.  This port draws terrain with the
+		   fixed-function pipeline and GL_MODULATE, so it multiplied the sector
+		   texture by the mask instead -- which is zero on most vertices, and is
+		   why the terrain rendered black.
+
+		   Detail texturing is off on this hardware anyway (see the Vita cvar
+		   preset), so rewrite the colour into the greyscale brightness the
+		   fixed-function path can actually use, and leave alpha opaque. */
+		{
+			const byte ucBright = (byte)FtoI(fBright*255.0f);
+			vert.color.bcolor[0] = ucBright;
+			vert.color.bcolor[1] = ucBright;
+			vert.color.bcolor[2] = ucBright;
+			vert.color.bcolor[3] = 255;
+		}
+#endif
 
     m_pTerrain->m_lstSectorVertArray.Add(vert);
   }

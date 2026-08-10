@@ -556,6 +556,9 @@ void CSystem::ShutDown(bool bRelaunch)
 /////////////////////////////////////////////////////////////////////////////////
 void CSystem::Quit()
 {
+#if defined(LINUX)
+	sceClibPrintf("[BOOTTRACE] CSystem::Quit() called\n");
+#endif
 	m_bQuit=true;
 #ifdef WIN32
 	if (m_bEditor)
@@ -600,7 +603,24 @@ public:
 //////////////////////////////////////////////////////////////////////////
 bool CSystem::CreateGame( const SGameInitParams &params )
 {
-#if defined(WIN32) || defined(LINUX)
+#if defined(__vita__)
+	// Vita: the original CryGame module is linked statically into the SELF.
+	// Preserve the stock creation and initialization contract without routing
+	// through the desktop dlopen/CryGame.so path.
+	if (params.pGame)
+		m_pGame = params.pGame;
+	else
+		m_pGame = CreateGameInstance();
+
+	if (!m_pGame || !m_pGame->Init(this, params.bDedicatedServer, m_bEditor, m_szGameMOD))
+		return false;
+
+	if (m_pIPhysicalWorld)
+	{
+		m_pIPhysicalWorld->SetPhysicsStreamer(m_pGame->GetPhysicsStreamer());
+		m_pIPhysicalWorld->SetPhysicsEventClient(m_pGame->GetPhysicsEventClient());
+	}
+#elif defined(WIN32) || defined(LINUX)
 	if (m_bEditor)
 	{
 		//////////////////////////////////////////////////////////////////////////
@@ -879,6 +899,33 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 	m_Time.Update();
 
 	float fFrameTime = m_Time.GetFrameTime();
+
+#if defined(__vita__)
+	/* One line a second describing the state that decides whether the game is
+	   actually running.  A frozen camera, characters stuck in bind pose and a
+	   cut scene that never ends all look identical from the outside and all
+	   three follow from any of: a zero frame time, a paused update, or the
+	   cut-scene cvars (es_UpdatePhysics / ai_systemupdate) left switched off by
+	   a BeginCutScene whose EndCutScene never came. */
+	{
+		static float s_fNextFrameReport = 0.0f;
+		float fNow = m_Time.GetCurrTime();
+		if (fNow >= s_fNextFrameReport)
+		{
+			s_fNextFrameReport = fNow + 1.0f;
+			ICVar *pPhys   = m_pConsole ? m_pConsole->GetCVar("es_UpdatePhysics") : NULL;
+			ICVar *pAIUpd  = m_pConsole ? m_pConsole->GetCVar("ai_systemupdate") : NULL;
+			ICVar *pHud    = m_pConsole ? m_pConsole->GetCVar("cl_display_hud") : NULL;
+			if (m_pLog)
+				m_pLog->LogToFile("\001[VITA][FRAME] dt=%.5f t=%.2f pause=%d noUpd=%d flags=0x%x "
+					"es_UpdatePhysics=%d ai_systemupdate=%d cl_display_hud=%d",
+					fFrameTime, fNow, nPauseMode, bNoUpdate ? 1 : 0, (unsigned)updateFlags,
+					pPhys ? pPhys->GetIVal() : -1,
+					pAIUpd ? pAIUpd->GetIVal() : -1,
+					pHud ? pHud->GetIVal() : -1);
+		}
+	}
+#endif
 
 	//////////////////////////////////////////////////////////////////////////
 	// Update script system.
