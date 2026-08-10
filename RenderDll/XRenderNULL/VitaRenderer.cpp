@@ -917,6 +917,11 @@ static void SetupVertexArraysForFormat(const byte *pBase, int nVertexFormat)
 	}
 }
 
+/* Published by CLeafBuffer::AddRenderElements for the duration of one buffer's
+   draw, so every chunk of a terrain sector can reach the texgen offsets that
+   only the first chunk's render element actually carries. */
+const float *g_pVitaTerrainTexGen = NULL;
+
 /* Terrain sector vertices (VERTEX_FORMAT_P3F_N_COL4UB_COL4UB) carry no texture
    coordinates at all -- the retail terrain shader derives them from world
    position using the three "texgen offset" floats the 3D engine hangs off the
@@ -1268,9 +1273,22 @@ void CVitaRenderer::DrawBuffer(CVertexBuffer * src, SVertexStream * indicies, in
 	/* Only formats with no coordinates of their own need them synthesised, and
 	   only the terrain hands over texgen offsets to synthesise them from. */
 	const float *pGeneratedUVs = NULL;
-	if (!gBufInfoTable[src->m_vertexformat].OffsTC && mi && mi->pRE && mi->pRE->m_CustomData)
+	if (!gBufInfoTable[src->m_vertexformat].OffsTC)
+	{
+		/* Only chunk 0 of a terrain sector owns a render element -- SetChunk
+		   creates one for nMatID 0 and the engine hangs the texgen offsets off
+		   whichever chunks have one -- but all ~34 strips of the sector share
+		   the same vertex buffer and the same mapping.  Reading the offsets
+		   only from the chunk being drawn textured the first strip and left the
+		   other thirty-three sampling the constant default coordinate, so the
+		   sector still came out almost entirely flat.  Fall back to the offsets
+		   the leaf buffer published for the whole draw. */
+		const float *pTexGen = (mi && mi->pRE) ? mi->pRE->m_CustomData : NULL;
+		if (!pTexGen)
+			pTexGen = g_pVitaTerrainTexGen;
 		pGeneratedUVs = VitaBuildTerrainTexCoords(pData, src->m_vertexformat,
-			src->m_NumVerts, mi->pRE->m_CustomData);
+			src->m_NumVerts, pTexGen);
+	}
 
 	const bool bGPUResident = EnsureGLVertexBuffer(src) && EnsureGLIndexBuffer(indicies);
 	if (bGPUResident)

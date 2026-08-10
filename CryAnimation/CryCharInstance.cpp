@@ -824,14 +824,22 @@ void CryCharInstance::Update(Vec3d vPos, float fRadius, unsigned uFlags)
 	   "don't update bones" bucket, which the camera position and frustum decide,
 	   so print those inputs too. */
 	{
+		/* Report the characters that matter -- the ones near enough that nUFM is
+		   0, i.e. the ones on screen -- and above all whether flagDontUpdateBones
+		   is set.  CEntity::UpdateCharacters passes that flag for every entity
+		   whose m_bVisible is false, and it makes the animation clock advance
+		   while the bones are never touched: layers active, pose stuck in bind.
+		   That is indistinguishable on screen from "no animation is playing",
+		   and the layer count already proved animations are playing. */
 		static unsigned s_nAnimReportCounter = 0;
-		if ((s_nAnimReportCounter++ % 600) == 0)
-			g_GetLog()->LogToFile("\001[VITA][ANIM] layers=%u frameTime=%.4f nFrameID=%d nUFM=%d update=%d inst=%d "
-				"radius=%.2f pos=(%.1f %.1f %.1f) cam=(%.1f %.1f %.1f)",
-				(unsigned)m_pModelState->m_arrAnimationLayers.size(), fFrameTime, nFrameID, nUFM,
+		const bool bNear = (nUFM == 0);
+		if (bNear && (s_nAnimReportCounter++ % 120) == 0)
+			g_GetLog()->LogToFile("\001[VITA][ANIM] layers=%u frameTime=%.4f dontUpdateBones=%d nFrameID=%d nUFM=%d "
+				"update=%d inst=%d radius=%.2f dist=%.1f",
+				(unsigned)m_pModelState->m_arrAnimationLayers.size(), fFrameTime,
+				(uFlags & flagDontUpdateBones) ? 1 : 0, nFrameID, nUFM,
 				update ? 1 : 0, m_pModelState->getInstanceNumber(), fRadius,
-				vPos.x, vPos.y, vPos.z,
-				GetViewCamera().GetPos().x, GetViewCamera().GetPos().y, GetViewCamera().GetPos().z);
+				GetDistance(vPos, GetViewCamera().GetPos()));
 	}
 #endif
 
