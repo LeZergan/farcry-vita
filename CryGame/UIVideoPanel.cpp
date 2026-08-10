@@ -8,7 +8,7 @@
 //  Description: UI Video Panel Manager
 //
 //  History:
-//  - [9/7/2003]: File created by Márcio Martins
+//  - [9/7/2003]: File created by MÃ¡rcio Martins
 //	- February 2005: Modified by Marco Corbetta for SDK release
 //
 //////////////////////////////////////////////////////////////////////
@@ -37,9 +37,117 @@ CUIVideoPanel::CUIVideoPanel()
 	m_hBink(0),
 #endif
 	m_bLooping(1), m_bPlaying(0), m_bPaused(0), m_iTextureID(-1), m_pSwapBuffer(0), m_szVideoFile(""), m_bKeepAspect(1)
+#if defined(__vita__)
+	, m_nVitaWidth(0), m_nVitaHeight(0), m_nVitaNumFrames(0), m_fVitaFrameRate(30.0f), m_fVitaNextFrameTime(0.0f)
+#endif
 {
-	m_DivX_Active=0;	
+	m_DivX_Active=0;
+#if defined(__vita__)
+	m_VitaBink.isValid = false;
+	m_VitaBink.instanceIndex = -1;
+#endif
 }
+
+#if defined(__vita__)
+/* NOTE for anyone tempted to add path fallbacks here: do not call Bink_Open
+   repeatedly to try alternative paths.  libbinkdec allocates from a fixed
+   instance pool and a failed open still consumes a slot, so probing several
+   candidates exhausts the pool and takes the whole app down.  Resolve the path
+   before opening, and open exactly once. */
+
+//! Bink hands frames back as planar YUV with the chroma planes at half
+//! resolution; the renderer wants packed RGBA, so convert as we copy.
+static void VitaBinkYUVToRGBA(const YUVbuffer yuv, int *pDest, int width, int height)
+{
+	const ImagePlane &planeY = yuv[0];
+	const ImagePlane &planeU = yuv[1];
+	const ImagePlane &planeV = yuv[2];
+	if (!planeY.data || !planeU.data || !planeV.data)
+		return;
+
+	/* Saturating lookup, built once.  The three clamps were six unpredictable
+	   branches per pixel; at video resolution that is millions of mispredicts a
+	   second on an in-order ARM core. */
+	static uint8_t s_arrClamp[1024];
+	static bool s_bClampReady = false;
+	if (!s_bClampReady)
+	{
+		for (int i = 0; i < 1024; ++i)
+		{
+			int v = i - 384;
+			s_arrClamp[i] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+		}
+		s_bClampReady = true;
+	}
+
+	for (int y = 0; y < height; ++y)
+	{
+		const uint8_t *rowY = planeY.data + (size_t)y * planeY.pitch;
+		const uint8_t *rowU = planeU.data + (size_t)(y >> 1) * planeU.pitch;
+		const uint8_t *rowV = planeV.data + (size_t)(y >> 1) * planeV.pitch;
+		int *rowDest = pDest + (size_t)y * width;
+
+		/* Chroma is subsampled 2:1 across, so both pixels of a pair share d and
+		   e -- and therefore share every term derived from them.  Computing
+		   those once per pair instead of once per pixel removes four of the six
+		   multiplies per pixel; only the luma term stays per pixel. */
+		for (int x = 0; x < width; x += 2)
+		{
+			const int nChroma = x >> 1;
+			const int d = (int)rowU[nChroma] - 128;
+			const int e = (int)rowV[nChroma] - 128;
+
+			const int rTerm =  409 * e + 128;
+			const int gTerm = -100 * d - 208 * e + 128;
+			const int bTerm =  516 * d + 128;
+
+			const int nPair = (x + 1 < width) ? 2 : 1;
+			for (int i = 0; i < nPair; ++i)
+			{
+				const int nLuma = 298 * ((int)rowY[x + i] - 16);
+				// +384 biases into the clamp table, which covers [-384, 639].
+				const unsigned r = s_arrClamp[((nLuma + rTerm) >> 8) + 384];
+				const unsigned g = s_arrClamp[((nLuma + gTerm) >> 8) + 384];
+				const unsigned b = s_arrClamp[((nLuma + bTerm) >> 8) + 384];
+
+				// Matches the GL_RGBA byte order the dynamic texture is uploaded with.
+				rowDest[x + i] = (int)(0xFF000000u | (b << 16) | (g << 8) | r);
+			}
+		}
+	}
+}
+
+//! Decodes the next frame if one is due. Returns false when the video ended.
+bool CUIVideoPanel::VitaAdvanceFrame()
+{
+	if (!m_VitaBink.isValid || !m_pSwapBuffer || m_iTextureID <= 0)
+		return false;
+
+	ITimer *pTimer = m_pUISystem->GetISystem()->GetITimer();
+	const float fNow = pTimer ? pTimer->GetAsyncCurTime() : 0.0f;
+	if (fNow < m_fVitaNextFrameTime)
+		return true;	// not time for the next frame yet
+	m_fVitaNextFrameTime = fNow + (1.0f / m_fVitaFrameRate);
+
+	const uint32_t nCurrent = Bink_GetCurrentFrameNum(m_VitaBink);
+	if (m_nVitaNumFrames > 0 && (int)nCurrent >= m_nVitaNumFrames)
+	{
+		if (!m_bLooping)
+			return false;
+		Bink_GotoFrame(m_VitaBink, 0);
+	}
+
+	YUVbuffer yuv;
+	memset(yuv, 0, sizeof(yuv));
+	if (!Bink_GetNextFrame(m_VitaBink, yuv))
+		return m_bLooping;
+
+	VitaBinkYUVToRGBA(yuv, m_pSwapBuffer, m_nVitaWidth, m_nVitaHeight);
+	m_pUISystem->GetIRenderer()->UpdateTextureInVideoMemory(m_iTextureID,
+		(unsigned char *)m_pSwapBuffer, 0, 0, m_nVitaWidth, m_nVitaHeight, eTF_8888);
+	return true;
+}
+#endif
 
 ////////////////////////////////////////////////////////////////////// 
 CUIVideoPanel::~CUIVideoPanel()
@@ -219,9 +327,91 @@ int CUIVideoPanel::LoadVideo(const string &szFileName, bool bSound)
 	}
 	return 1;
 #else
-	OnError("");
+#if defined(__vita__)
+	/* Real Bink playback through libbinkdec (third_party/libbinkdec), the
+	   LGPL decoder vendored for this port -- the licensed RAD SDK the desktop
+	   build links is not available and the Vita's hardware decoder only does
+	   H.264.  Same shape as the BinkOpen path above: decode into an RGBA swap
+	   buffer, hand it to a dynamic texture, and let Draw() present it. */
+	ReleaseVideo();
 
+	m_szVideoFile = szFileName;
+	m_VitaBink = Bink_Open(szFileName.c_str());
+	if (!m_VitaBink.isValid)
+	{
+		// Missing or unreadable: the normal unsupported-media contract. Do not
+		// call OnError synchronously -- BackScreen.OnError calls OnFinished,
+		// which calls LoadVideo again and overflows Lua's stack during menu
+		// creation.
+		m_bPlaying = 0;
+		m_bPaused = 0;
+		return 0;
+	}
+
+	uint32_t nWidth = 0, nHeight = 0;
+	Bink_GetFrameSize(m_VitaBink, nWidth, nHeight);
+	if (!nWidth || !nHeight)
+	{
+		/* Mark the handle dead as well as closing it.  ReleaseVideo() closes
+		   whenever isValid is set, so leaving it set here means the next
+		   LoadVideo closes this same instance a second time -- which is what
+		   crashed the game when the in-game menu opened a video after the
+		   main menu had already used one. */
+		Bink_Close(m_VitaBink);
+		m_VitaBink.isValid = false;
+		m_VitaBink.instanceIndex = -1;
+		m_bPlaying = 0;
+		return 0;
+	}
+
+	m_nVitaWidth = (int)nWidth;
+	m_nVitaHeight = (int)nHeight;
+	m_fVitaFrameRate = Bink_GetFrameRate(m_VitaBink);
+	if (m_fVitaFrameRate <= 0.0f)
+		m_fVitaFrameRate = 30.0f;
+	m_nVitaNumFrames = (int)Bink_GetNumFrames(m_VitaBink);
+	m_fVitaNextFrameTime = 0.0f;
+
+	/* A full-size RGBA frame is a couple of megabytes, and by the time the
+	   in-game menu opens the heap can be too full to give it up.  new returns
+	   null here rather than throwing, and the memset below would then write
+	   through it -- that is what crashed the game on pressing Start.  Skip the
+	   video instead; the panel just stays blank. */
+	m_pSwapBuffer = new int[m_nVitaWidth * m_nVitaHeight];
+	if (!m_pSwapBuffer)
+	{
+		Bink_Close(m_VitaBink);
+		m_VitaBink.isValid = false;
+		m_VitaBink.instanceIndex = -1;
+		m_bPlaying = 0;
+		return 0;
+	}
+	memset(m_pSwapBuffer, 0, sizeof(int) * m_nVitaWidth * m_nVitaHeight);
+
+	m_iTextureID = m_pUISystem->GetIRenderer()->DownLoadToVideoMemory(
+		(unsigned char *)m_pSwapBuffer, m_nVitaWidth, m_nVitaHeight,
+		eTF_0888, eTF_0888, 0, 0, FILTER_LINEAR, 0, "$VideoPanel", FT_DYNAMIC);
+
+	if (m_iTextureID == 0 || m_iTextureID == -1)
+	{
+		Bink_Close(m_VitaBink);
+		m_VitaBink.isValid = false;
+		m_VitaBink.instanceIndex = -1;
+		delete [] m_pSwapBuffer;
+		m_pSwapBuffer = 0;
+		m_iTextureID = -1;
+		m_bPlaying = 0;
+		return 0;
+	}
+
+	m_bPaused = 0;
+	m_bPlaying = 0;	// Play() starts it, matching the desktop contract
+	return 1;
+#else
+	m_bPlaying = 0;
+	m_bPaused = 0;
 	return 0;
+#endif
 #endif
 
 	return 0;
@@ -232,6 +422,21 @@ LRESULT CUIVideoPanel::Update(unsigned int iMessage, WPARAM wParam, LPARAM lPara
 {
 
 	FUNCTION_PROFILER( m_pUISystem->GetISystem(), PROFILE_GAME );
+#if defined(__vita__)
+	if ((iMessage == UIM_DRAW) && (wParam == 0))
+	{
+		if (m_bPlaying && !m_bPaused && m_VitaBink.isValid)
+		{
+			if (!VitaAdvanceFrame())
+			{
+				Stop();
+				OnFinished();
+			}
+		}
+		return CUISystem::DefaultUpdate(this, iMessage, wParam, lParam);
+	}
+	return CUISystem::DefaultUpdate(this, iMessage, wParam, lParam);
+#endif
 #if !defined(NOT_USE_DIVX_SDK)
 	if (m_DivX_Active){
 		g_DivXPlayer.Update_DivX(this);
@@ -320,6 +525,16 @@ int CUIVideoPanel::Play()
  	m_bPlaying = 1;
 	m_bPaused = 0;
 	return 1;
+#elif defined(__vita__)
+	if (!m_VitaBink.isValid)
+	{
+		if (m_szVideoFile.empty() || !LoadVideo(m_szVideoFile, 1))
+			return 0;
+	}
+	m_bPlaying = 1;
+	m_bPaused = 0;
+	m_fVitaNextFrameTime = 0.0f;	// decode the first frame immediately
+	return 1;
 #else
 	return 0;
 #endif
@@ -383,6 +598,27 @@ int CUIVideoPanel::ReleaseVideo()
 		delete[] m_pSwapBuffer;
 		m_pSwapBuffer = 0;
 	}
+	return 1;
+#elif defined(__vita__)
+	if (m_VitaBink.isValid)
+	{
+		Bink_Close(m_VitaBink);
+		m_VitaBink.isValid = false;
+		m_VitaBink.instanceIndex = -1;
+	}
+	if (m_iTextureID > 0)
+	{
+		m_pUISystem->GetIRenderer()->RemoveTexture(m_iTextureID);
+		m_iTextureID = -1;
+	}
+	if (m_pSwapBuffer)
+	{
+		delete[] m_pSwapBuffer;
+		m_pSwapBuffer = 0;
+	}
+	m_bPlaying = 0;
+	m_bPaused = 0;
+	m_szVideoFile = "";
 	return 1;
 #else
 	return 0;
