@@ -1498,7 +1498,19 @@ void CVitaRenderer::SetWhiteTexture()
 		glDisable(GL_TEXTURE_2D);
 		g_nTexture2DEnabled = 0;
 	}
-	glColor4f(1, 1, 1, 1);
+	/* Mid grey rather than pure white.  A surface that lands here has no
+	   texture, and full white makes it the brightest thing on screen -- the
+	   blown-out slabs showing through openings, which read as a lighting fault
+	   rather than as missing art.  Grey sits in the range real surfaces occupy,
+	   so a missing texture looks like untextured geometry instead of a light
+	   source.  Exposed as a cvar so it can be judged on the device without a
+	   rebuild. */
+	static ICVar *s_pUntexturedLevel = NULL;
+	if (!s_pUntexturedLevel && iConsole)
+		s_pUntexturedLevel = iConsole->CreateVariable("r_vita_untextured_level", "0.6", 0,
+			"Grey level drawn for surfaces with no texture (1 = the old pure white)");
+	const float fLevel = s_pUntexturedLevel ? s_pUntexturedLevel->GetFVal() : 0.6f;
+	glColor4f(fLevel, fLevel, fLevel, 1);
 #endif
 }
 
