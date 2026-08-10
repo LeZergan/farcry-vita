@@ -959,7 +959,13 @@ static bool VitaVertexColoursAreUnlit(const byte *pData, int nVertexFormat, int 
 	int nBrightest = 0;
 	// A few hundred vertices is plenty to decide; whole meshes can be large.
 	const int nSampleStep = (nNumVerts > 256) ? (nNumVerts / 256) : 1;
-	for (int i = 0; i < nNumVerts && nBrightest < 24; i += nSampleStep)
+	/* Near-pure-black only.  An earlier threshold of 24/255 (~9%) would also
+	   have caught geometry that is genuinely dark but lit -- a dim interior
+	   wall -- and blown it up to full brightness, trading one wrong look for
+	   another.  Vertex lighting that never received a value is 0, so require
+	   effectively that. */
+	const int kUnlitThreshold = 8;
+	for (int i = 0; i < nNumVerts && nBrightest < kUnlitThreshold; i += nSampleStep)
 	{
 		const byte *c = pData + (size_t)i * nStride + tbl.OffsColor;
 		const int nMax = (c[0] > c[1] ? c[0] : c[1]) > c[2] ? (c[0] > c[1] ? c[0] : c[1]) : c[2];
@@ -968,7 +974,7 @@ static bool VitaVertexColoursAreUnlit(const byte *pData, int nVertexFormat, int 
 	}
 	rEntry.pData = pData;
 	rEntry.nVerts = nNumVerts;
-	rEntry.bUnlit = (nBrightest < 24);
+	rEntry.bUnlit = (nBrightest < kUnlitThreshold);
 	return rEntry.bUnlit;
 }
 
