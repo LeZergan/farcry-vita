@@ -218,6 +218,9 @@ CPlayer::CPlayer(CXGame *pGame) :
 
 	m_bFirstPerson = false;
 	m_bFirstPersonLoaded = true;
+#if defined(__vita__)
+	m_bVitaUpdatedSinceLastCheck = false;
+#endif
 
 	m_bLightOn = false;
 
@@ -876,6 +879,13 @@ void CPlayer::Update()
 	bool bPlayerVisible = bMyPlayer || IsVisible();
 
 #if defined(__vita__)
+	/* Tell the game loop this ran.  Every previous attempt at forcing first
+	   person has been placed inside this function, and a full in-game log
+	   contains not one line from any of them -- so the question of whether this
+	   function is even reached for the local player has to stop being an
+	   assumption.  CXGame::Update reads and clears this. */
+	m_bVitaUpdatedSinceLastCheck = true;
+
 	/* Put the local player into first person and stop his body being drawn.
 	   m_bFirstPerson starts false (third person) and on a level started fresh
 	   nothing ever turns it on -- SetViewMode is otherwise only reached from a
@@ -6305,6 +6315,42 @@ void CPlayer::CalcJumpSpeed( float dist, float height, float &horV, float &vertV
 	if(height!=0.0f) horV=(dist*cry_sqrtf(fGravity)) / (2*cry_sqrtf(2*height));
 		else horV=0.0f;
 }
+
+#if defined(__vita__)
+void CPlayer::VitaEnsureFirstPerson(bool bDriveCamera)
+{
+	/* The same work the block at the top of Update does, callable from the game
+	   loop for the case where Update is not reaching the local player at all.
+	   Setting m_bFirstPerson on its own is not enough when that happens: nothing
+	   then reads the flag either, so the camera is never placed and the view
+	   stays wherever it was left.  Driving UpdateFirstPersonView from here is
+	   what actually puts the camera behind the player's eyes -- but only when
+	   Update did not already do it this frame, or the view offsets would be
+	   applied twice, and only when no cut scene is running, because the cut
+	   scene camera has to win for as long as it is playing. */
+	if (!m_pEntity || m_pVehicle || !IsMyPlayer())
+		return;
+
+	if (!m_bFirstPerson)
+	{
+		m_bFirstPerson = true;
+		SetViewMode(false);
+	}
+	else
+	{
+		// Re-assert: several paths set the draw flag back on without touching
+		// m_bFirstPerson, which puts the player's own head in front of the camera.
+		m_pEntity->DrawCharacter(0, 0);
+		m_pEntity->NeedsUpdateCharacter(0, true);
+	}
+
+	if (bDriveCamera)
+	{
+		m_pEntity->SetRegisterInSectors(false);
+		UpdateFirstPersonView();
+	}
+}
+#endif
 
 void CPlayer::SetViewMode(bool bThirdPerson)
 {

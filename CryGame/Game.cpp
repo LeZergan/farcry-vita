@@ -1055,6 +1055,47 @@ bool CXGame::Update()
 		pTimer->MeasureTime("3SysRend");
 	}
 #if defined(__vita__)
+	/* First person, driven from the game loop rather than from CPlayer::Update.
+	   Every previous attempt lived inside CPlayer::Update, and a 164 KB log of a
+	   real in-game session contains not one line from any of them while the HUD
+	   report a few lines below fires throughout -- so CPlayer::Update is not
+	   reaching that code for the local player, and putting a fourth attempt in
+	   the same place would fail the same way.  This loop demonstrably runs.
+
+	   Report the whole state, once every 120 frames: whether the local player
+	   entity and its container resolve, whether Update ran since the last check,
+	   and the flags that gate the forcing.  Each of those is a different bug
+	   with a different fix, and they are indistinguishable on screen.
+
+	   Then stand in for Update when it did not run -- including placing the
+	   camera, since with Update absent nothing else reads m_bFirstPerson.  When
+	   Update did run it has already done all of this, so leave it alone. */
+	{
+		IEntity *pMyPlayerEntity = GetMyPlayer();
+		CPlayer *pLocalPlayer = 0;
+		if (pMyPlayerEntity && pMyPlayerEntity->GetContainer())
+			pMyPlayerEntity->GetContainer()->QueryContainerInterface(CIT_IPLAYER, (void **)&pLocalPlayer);
+
+		bool bPlayerUpdated = false;
+		if (pLocalPlayer)
+		{
+			bPlayerUpdated = pLocalPlayer->m_bVitaUpdatedSinceLastCheck;
+			pLocalPlayer->m_bVitaUpdatedSinceLastCheck = false;
+		}
+
+		static unsigned s_nViewReportCounter = 0;
+		if ((s_nViewReportCounter++ % 120) == 0 && m_pLog)
+			m_pLog->LogToFile("\001[VITA][VIEW] entity=%p player=%p updateRan=%d firstPerson=%d vehicle=%p isMine=%d hideLocal=%d pause=%d",
+				(void *)pMyPlayerEntity, (void *)pLocalPlayer, bPlayerUpdated ? 1 : 0,
+				pLocalPlayer ? (pLocalPlayer->m_bFirstPerson ? 1 : 0) : -1,
+				pLocalPlayer ? (void *)pLocalPlayer->GetVehicle() : (void *)0,
+				pLocalPlayer ? (pLocalPlayer->IsMyPlayer() ? 1 : 0) : -1,
+				m_bHideLocalPlayer ? 1 : 0, bPause ? 1 : 0);
+
+		if (pLocalPlayer && !bPlayerUpdated)
+			pLocalPlayer->VitaEnsureFirstPerson(!m_bHideLocalPlayer && !bPause);
+	}
+
 	/* Four separate things gate the HUD, and if any one of them is off the
 	   result is identical on screen: no HUD.  m_pCurrentUI in particular is only
 	   ever set from CXClient::SetPlayerID, and only when the player entity

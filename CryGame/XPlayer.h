@@ -660,8 +660,20 @@ public:
 
 
 	string m_strModel;					//!< Name of player model.
-	bool m_bFirstPerson;						//!< True when in first person mode. 
-	bool m_bFirstPersonLoaded;					//!< True when was saved in first person mode - set on loading. 
+	bool m_bFirstPerson;						//!< True when in first person mode.
+	bool m_bFirstPersonLoaded;					//!< True when was saved in first person mode - set on loading.
+
+#if defined(__vita__)
+	/*! Set by Update, read and cleared by CXGame::Update.  Forcing first person
+	    from inside Update only works if Update runs, and there are several ways
+	    for it not to: the entity has to survive CEntity::Update's visibility
+	    gate, its container updates have to be enabled, and it has to be reached
+	    at all.  This lets the game loop -- which does run every frame -- see
+	    whether it did, report it, and stand in for it when it did not. */
+	bool m_bVitaUpdatedSinceLastCheck;
+	//! Put the local player in first person; optionally drive the camera too.
+	void VitaEnsureFirstPerson(bool bDriveCamera);
+#endif
 
 	bool m_bAlwaysRun;
 	bool m_bWeaponJustFired;
