@@ -38,8 +38,22 @@ void CTerrain::DrawVisibleSectors()
   if(!GetCVars()->e_terrain)
     return;
 
-  if(!(GetFrameID() % TEXTURE_UPDATE_PERIOD_IN_FRAMES)) 
+#if defined(LINUX)
+  /* Retail refills the sector-texture budget once every 32 frames and spends at
+     most two uploads on it, a rate set for streaming off a 2004 DVD.  With ~169
+     sectors that each climb several mip levels, the terrain needs minutes to
+     reach full resolution -- which reads as permanently low-detail ground
+     rather than as streaming.  Reading a sector from cover.ctc and uploading
+     the DXT1 blocks is cheap here (the file is on internal storage and the
+     upload is a few KB), so refill far more often.  This is only safe because
+     the released textures are now actually freed; while they leaked, a faster
+     rate would have exhausted video memory sooner. */
+  if(!(GetFrameID() % 4))
+    m_nUploadsInFrame = 0;
+#else
+  if(!(GetFrameID() % TEXTURE_UPDATE_PERIOD_IN_FRAMES))
     m_nUploadsInFrame = 0; // allow to update texture only every x frames
+#endif
 
   const float dCSS = 1.f/CTerrain::GetSectorSize();
 //  const float fDistFadeK = 1.f/(2.f*fMaxViewDist);

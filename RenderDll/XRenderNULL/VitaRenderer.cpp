@@ -1910,6 +1910,28 @@ CCObject * CVitaRenderer::EF_AddSpriteToScene(int Ef, int numPts, SColorVert * v
 		}
 	}
 	SetCullMode(R_CULL_NONE);
+	/* Sprites and particles arrive here with their blend already chosen by
+	   CObjManager::AddPolygonToRenderer, which maps the effect's blend type to
+	   additive (ONE/ONE), colour-based (ONE/ONEMINUSSRCCOL) or alpha.  An
+	   additive effect drawn alpha-blended shows its black backing square, which
+	   is the reported "black background" behind muzzle flashes and lights.
+	   Report the state actually used per distinct effect id so it is clear
+	   whether the blend type is being lost upstream or honoured here. */
+	{
+		static std::map<int, int> s_reportedSpriteStates;
+		const int nState = obj ? obj->m_RenderState : 0;
+		if (iLog && s_reportedSpriteStates.size() < 64 &&
+			s_reportedSpriteStates.find(Ef) == s_reportedSpriteStates.end())
+		{
+			s_reportedSpriteStates[Ef] = nState;
+			iLog->LogToFile("\001[VITA][SPRITE] ef=%d state=0x%x additive=%d colorbased=%d alpha=%d tex=%d",
+				Ef, (unsigned)nState,
+				(nState & GS_BLEND_MASK) == (GS_BLSRC_ONE | GS_BLDST_ONE) ? 1 : 0,
+				(nState & GS_BLEND_MASK) == (GS_BLSRC_ONE | GS_BLDST_ONEMINUSSRCCOL) ? 1 : 0,
+				(nState & GS_BLEND_MASK) == (GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA) ? 1 : 0,
+				obj ? obj->m_NumCM : -1);
+		}
+	}
 	SetState(obj ? obj->m_RenderState : (GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA));
 	if (obj && obj->m_NumCM > 0)
 		SetTexture(obj->m_NumCM, eTT_Base);
@@ -3474,7 +3496,24 @@ void CVitaRenderer::RemoveTexture(unsigned int TextureId)
 {
 	std::map<int, CVitaTexPic *>::iterator it = m_TextureById.find((int)TextureId);
 	if (it == m_TextureById.end())
+	{
+#if defined(LINUX)
+		/* Not every texture id belongs to a CVitaTexPic.  DownLoadToVideoMemory
+		   hands back a bare GL name, and the terrain texture pool -- which runs
+		   with pooling disabled, so it allocates a fresh texture for every
+		   sector LOD change and releases the old one through here -- is the
+		   heaviest user of that path.  Returning without deleting leaked one
+		   texture per sector per LOD step for the lifetime of the level, and
+		   once video memory ran out new uploads started failing, which shows up
+		   as surfaces turning white.  Nothing else owns these, so free it. */
+		if (TextureId && glIsTexture((GLuint)TextureId))
+		{
+			GLuint nName = (GLuint)TextureId;
+			glDeleteTextures(1, &nName);
+		}
+#endif
 		return;
+	}
 	CVitaTexPic *pTexture = it->second;
 	/* Script texture userdata is garbage-collected after its numeric ID has
 	   been copied into long-lived UI widgets. The retail texture manager

@@ -42,8 +42,16 @@ void CSectorInfo::SetTextures(bool bMakeUncompressedForEditing)
   { // increase tex resolution
 		if(!m_bLockTexture)
 		{
+#if defined(LINUX)
+			// Paired with the faster budget refill in CTerrain::DrawVisibleSectors:
+			// several sectors per window instead of two, so the ground reaches its
+			// real resolution in a couple of seconds rather than minutes.
+			if(m_pTerrain->m_nUploadsInFrame>5)
+				return;
+#else
 			if(m_pTerrain->m_nUploadsInFrame>1)
 				return; // no more than 1 upload per frame
+#endif
 
 			// remove hi res texture if it's not needed
 			if(m_cGeometryMML>=MAX_MML_LEVEL) // NOTE: in testing
