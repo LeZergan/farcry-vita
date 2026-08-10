@@ -3166,12 +3166,31 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 				if (sr->m_AlphaRef >= 0.5f) renderState |= GS_ALPHATEST_GEQUAL128;
 				else if (sr->m_AlphaRef > 0.0f) renderState |= GS_ALPHATEST_GEQUAL64;
 			}
-			if (sr->m_Opacity < 0.999f)
+			/* Additive is a property of the material, not of its opacity.  This
+			   only reached for the blend at all when m_Opacity was below 1, so an
+			   additive material authored at full opacity -- which is the normal
+			   way to author a muzzle flash, a tracer, a glow or a light halo --
+			   was drawn with blending switched off entirely.  Those effects are
+			   painted on a black backing square that additive blending is meant
+			   to make disappear, so instead of the effect you get the square:
+			   the black boxes behind shots and lights.
+
+			   The retail path takes its blend from the shader script (Blend=ONE
+			   ONE), which likewise has nothing to do with opacity.  Test the flag
+			   first, and keep the opacity test for ordinary translucency. */
+			const bool bAdditive = (sr->m_ResFlags & MTLFLAG_ADDITIVE) != 0;
+			if (bAdditive)
 			{
 				renderState &= ~GS_DEPTHWRITE;
-				renderState |= (sr->m_ResFlags & MTLFLAG_ADDITIVE)
-					? (GS_BLSRC_ONE | GS_BLDST_ONE)
-					: (GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA);
+				renderState |= (GS_BLSRC_ONE | GS_BLDST_ONE);
+				// A black source contributes nothing under additive blending, so an
+				// alpha test would only punch holes in the parts that do glow.
+				renderState &= ~GS_ALPHATEST_MASK;
+			}
+			else if (sr->m_Opacity < 0.999f)
+			{
+				renderState &= ~GS_DEPTHWRITE;
+				renderState |= (GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA);
 			}
 			SetCullMode((sr->m_ResFlags & MTLFLAG_2SIDED) ? R_CULL_NONE : R_CULL_BACK);
 		}
