@@ -65,7 +65,19 @@ bool CUIHud::Reset()
 	// initialize hud
 	m_pHudScriptObj=m_pScriptSystem->CreateEmptyObject();
 	if(!m_pScriptSystem->GetGlobalValue("Hud",m_pHudScriptObj))
+	{
+#if defined(__vita__)
+		/* Silence here is ambiguous: no error in the log reads the same whether
+		   the HUD script loaded fine or Reset was never called at all.  Both end
+		   with nothing drawn, and CUIHud::Update calls Hud:OnUpdate regardless of
+		   whether the Hud table exists, so a missing table fails silently too. */
+		m_pISystem->GetILog()->LogToFile("\001[VITA][HUD] '%s' executed but defined no global Hud table -- nothing will draw", filename);
+#endif
 		return false;
+	}
+#if defined(__vita__)
+	m_pISystem->GetILog()->LogToFile("\001[VITA][HUD] loaded '%s' and found the Hud table; calling Hud:OnInit", filename);
+#endif
 
 	m_pScriptSystem->BeginCall("Hud","OnInit");
 	m_pScriptSystem->PushFuncParam(m_pHudScriptObj);
