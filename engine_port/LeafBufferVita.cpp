@@ -95,8 +95,14 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 		return;
 	{
 		static std::map<std::string, bool> reportedSources;
+		/* Build the key only while the report can still fire.  This runs on
+		   every draw call of every frame, and constructing (and hashing) a
+		   std::string per draw just to discover the cap was reached long ago is
+		   pure overhead in the hottest path in the renderer. */
+		if (reportedSources.size() < 96)
+		{
 		std::string sourceKey = m_sSource ? m_sSource : "<null>";
-		if (reportedSources.size() < 96 && reportedSources.find(sourceKey) == reportedSources.end())
+		if (reportedSources.find(sourceKey) == reportedSources.end())
 		{
 			reportedSources[sourceKey] = true;
 			sceClibPrintf("[VITADRAW] source=%s prim=%d fmt=%d verts=%d inds=%d mats=%d clientTex=%d\n",
@@ -104,6 +110,7 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 				m_pVertexBuffer->m_NumVerts, m_NumIndices,
 				m_pMats ? m_pMats->Count() : -1, m_nClientTextureBindID);
 			fflush(stdout);
+		}
 		}
 	}
 

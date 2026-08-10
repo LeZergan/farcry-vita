@@ -949,6 +949,24 @@ static const float *VitaBuildTerrainTexCoords(const byte *pData, int nVertexForm
 	if (fScale == 0.0f)
 		return NULL;
 	static std::vector<float> s_arrTerrainUVs;
+	/* A sector is drawn as dozens of strip chunks that all share one vertex
+	   buffer and one mapping, so without this the same few thousand
+	   multiply-adds were repeated for every chunk of every sector, every frame.
+	   The inputs fully determine the output, so remember them and rebuild only
+	   when they actually change. */
+	static const byte *s_pLastData = NULL;
+	static int s_nLastVerts = 0;
+	static float s_fLastScale = 0.0f, s_fLastOffU = 0.0f, s_fLastOffV = 0.0f;
+	if (pData == s_pLastData && nNumVerts == s_nLastVerts && fScale == s_fLastScale &&
+		pTexGenOffsets[0] == s_fLastOffU && pTexGenOffsets[1] == s_fLastOffV &&
+		s_arrTerrainUVs.size() == (size_t)nNumVerts * 2)
+		return &s_arrTerrainUVs[0];
+	s_pLastData = pData;
+	s_nLastVerts = nNumVerts;
+	s_fLastScale = fScale;
+	s_fLastOffU = pTexGenOffsets[0];
+	s_fLastOffV = pTexGenOffsets[1];
+
 	s_arrTerrainUVs.resize((size_t)nNumVerts * 2);
 	const int nStride = m_VertexSize[nVertexFormat];
 	for (int i = 0; i < nNumVerts; ++i)
