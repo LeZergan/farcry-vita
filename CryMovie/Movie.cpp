@@ -577,11 +577,15 @@ void CMovieSystem::Update( float dt )
 	   very different bugs and look the same on screen, so report the sequence's
 	   own clock against its range once a second while anything is playing. */
 	{
-		static float s_fMovieReportAt = 0.0f;
-		s_fMovieReportAt -= dt;
-		if (s_fMovieReportAt <= 0.0f && !m_playingSequences.empty() && m_system && m_system->GetILog())
+		/* Count updates rather than subtracting dt.  The previous version could
+		   only report again after a second of dt had accumulated, so on the one
+		   case worth seeing -- a sequence whose clock is frozen -- it printed
+		   exactly once and then went quiet, which reads identically to the
+		   sequence having ended.  Reporting dt itself is the point here. */
+		static unsigned s_nMovieReportCounter = 0;
+		if ((s_nMovieReportCounter++ % 120) == 0 && !m_playingSequences.empty() &&
+			m_system && m_system->GetILog())
 		{
-			s_fMovieReportAt = 1.0f;
 			for (PlayingSequences::iterator rit = m_playingSequences.begin(); rit != m_playingSequences.end(); ++rit)
 			{
 				Range r = rit->sequence->GetTimeRange();
@@ -665,8 +669,15 @@ void CMovieSystem::Update( float dt )
 	   something is wrong -- end the scene and give the controls back. */
 	if (m_pUser && m_nOpenCutScenes > 0)
 	{
+		/* Count updates, not seconds.  This watchdog accumulated dt, which makes
+		   it useless against the exact failure it exists to catch: a cut scene
+		   whose clock is not advancing.  If dt is zero the sequence never
+		   reaches the end of its range AND the watchdog never trips, so the
+		   player keeps the "player_dead" action map indefinitely -- which is
+		   what a cut scene that "never ends" actually is.  A count of update
+		   calls advances regardless of what dt says. */
 		const float kMaxCutSceneSeconds = 90.0f;
-		m_fOpenCutSceneTime += dt;
+		m_fOpenCutSceneTime += (dt > 0.0f) ? dt : (1.0f / 60.0f);
 		if (m_fOpenCutSceneTime > kMaxCutSceneSeconds)
 		{
 			if (m_system && m_system->GetILog())
