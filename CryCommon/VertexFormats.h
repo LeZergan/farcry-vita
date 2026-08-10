@@ -297,11 +297,24 @@ const int g_VertFormatUVOffsets[] =
 	-1, // VERTEX_FORMAT_P3F_COL4UB_COL4UB=1,     
 	-1, // VERTEX_FORMAT_P3F_N=1,                
   -1, // VERTEX_FORMAT_P3F_N_COL4UB=1,                
-	(int)&(((struct_VERTEX_FORMAT_P3F_N_TEX2F*)0)->st[0]), // VERTEX_FORMAT_P3F_N_TEX2F=3,          // everything else (20 bytes)
-	(int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F*)0)->st[0]) // VERTEX_FORMAT_P3F_N_COL4UB_TEX2F=4,   // usually plants (24 bytes)
-  -1, // VERTEX_FORMAT_P3F_N_COL4UB_COL4UB=1,                
-  (int)&(((struct_VERTEX_FORMAT_P3F_COL4UB_COL4UB_TEX2F*)0)->st[0]), // VERTEX_FORMAT_P3F_COL4UB_COL4UB_TEX2F=4,   // usually plants (24 bytes)
-  (int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F*)0)->st[0]), // VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F=4,   // usually plants (24 bytes)
+	(int)&(((struct_VERTEX_FORMAT_P3F_N_TEX2F*)0)->st[0]), // VERTEX_FORMAT_P3F_N_TEX2F=9
+	/* The comma on the next line was missing, so this entry parsed as
+	   "offsetof(st[0]) - 1" and the table came out one element short.  Two
+	   consequences: every UV written for VERTEX_FORMAT_P3F_N_COL4UB_TEX2F (the
+	   36-byte skinned-character format) landed one byte below where it belongs,
+	   and every format from P3F_N_COL4UB_COL4UB upwards read its neighbour's
+	   offset.  x86 does unaligned stores silently, so this survived unnoticed;
+	   on ARM the 8-byte CryUV store faults, which is what crashed the moment
+	   character skinning started running for real. */
+	(int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F*)0)->st[0]), // VERTEX_FORMAT_P3F_N_COL4UB_TEX2F=10
+  -1, // VERTEX_FORMAT_P3F_N_COL4UB_COL4UB=11
+  (int)&(((struct_VERTEX_FORMAT_P3F_COL4UB_COL4UB_TEX2F*)0)->st[0]), // VERTEX_FORMAT_P3F_COL4UB_COL4UB_TEX2F=12
+  (int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F*)0)->st[0]), // VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F=13
+  /* getVertBuf only range-checks against VERTEX_FORMAT_NUMS, so the last three
+     formats have to exist here or the lookup reads past the end of the table. */
+  -1, // VERTEX_FORMAT_T3F_B3F_N3F=14
+  -1, // VERTEX_FORMAT_TEX2F=15
+  -1, // VERTEX_FORMAT_P3F_COL4UB_TEX2F_TEX2F=16
 };
 
 
@@ -324,6 +337,10 @@ const int g_VertFormatRGBAOffsets[] =
   (int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB*)0)->color.dcolor),
   (int)&(((struct_VERTEX_FORMAT_P3F_COL4UB_COL4UB_TEX2F*)0)->color.dcolor),
   (int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F*)0)->color.dcolor),
+  // Same range-check gap as the UV table: entries 14..16 must exist.
+  -1, // VERTEX_FORMAT_T3F_B3F_N3F=14
+  -1, // VERTEX_FORMAT_TEX2F=15
+  (int)&(((struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F_TEX2F*)0)->color.dcolor), // =16
 };
 
 // this is the table of offsets of normals relative to the start of the structure
@@ -342,9 +359,13 @@ const int g_VertFormatNormalOffsets[] =
   (int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB*)0)->normal), // VERTEX_FORMAT_P3F_N_COL4UB=1,                
   (int)&(((struct_VERTEX_FORMAT_P3F_N_TEX2F*)0)->normal), // VERTEX_FORMAT_P3F_N_TEX2F=3,          // everything else (20 bytes)
   (int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F*)0)->normal), // VERTEX_FORMAT_P3F_N_COL4UB_TEX2F=4,   // usually plants (24 bytes)
-  (int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB*)0)->normal),
-  -1, 
-  (int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F*)0)->normal),
+  (int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB*)0)->normal), // =11
+  -1, // VERTEX_FORMAT_P3F_COL4UB_COL4UB_TEX2F=12
+  (int)&(((struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F*)0)->normal), // =13
+  // Same range-check gap as the UV table: entries 14..16 must exist.
+  -1, // VERTEX_FORMAT_T3F_B3F_N3F=14
+  -1, // VERTEX_FORMAT_TEX2F=15
+  -1, // VERTEX_FORMAT_P3F_COL4UB_TEX2F_TEX2F=16
 };
 
 static struct SBufInfoTable gBufInfoTable[] = 
