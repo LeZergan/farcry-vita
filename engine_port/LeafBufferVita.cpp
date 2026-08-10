@@ -164,14 +164,20 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 			nRunIndexCount = 0;
 		};
 
+		/* Hoisted out of the chunk loop: these depend only on the buffer's source
+		   name, not on the chunk, so running two case-insensitive string
+		   comparisons per chunk per draw per frame re-derived the same answer
+		   dozens of times for every buffer.  Terrain sectors alone carry ~34
+		   chunks each. */
+		const bool isOutdoorWater = m_sSource && strnicmp(m_sSource, "OutdoorWater", 12) == 0;
+		const bool isWaterVolume = m_sSource && strnicmp(m_sSource, "WaterVolume", 11) == 0;
+		const bool isWaterSurface = isOutdoorWater || isWaterVolume;
+
 		for (int i = 0; i < m_pMats->Count(); i++)
 		{
 			CMatInfo &mi = (*m_pMats)[i];
 			if (mi.nNumIndices <= 0)
 				continue;
-			const bool isOutdoorWater = m_sSource && strnicmp(m_sSource, "OutdoorWater", 12) == 0;
-			const bool isWaterVolume = m_sSource && strnicmp(m_sSource, "WaterVolume", 11) == 0;
-			const bool isWaterSurface = isOutdoorWater || isWaterVolume;
 			/* The retail low-spec indoor-water shader uses the animated caustic
 			   map and a fixed translucent water colour. The compact renderer has
 			   no CSL multipass interpreter, so preserve that authored fallback in
