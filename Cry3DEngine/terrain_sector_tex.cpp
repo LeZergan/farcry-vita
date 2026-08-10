@@ -94,8 +94,22 @@ int CSectorInfo::MakeSectorTextureDDS( int sec_id, int nMipMapLevelToLoad, bool 
   { 
     m_pTerrain->m_fpTerrainTextureFile = GetSystem()->GetIPak()->FOpen(Get3DEngine()->GetLevelFilePath("terrain\\cover.ctc"), "rb");
 
-    if(!m_pTerrain->m_fpTerrainTextureFile) 
+    if(!m_pTerrain->m_fpTerrainTextureFile)
+    {
+      /* Returning zero here means every sector keeps texture id 0 and the whole
+         terrain renders untextured, with nothing at all said about why.  The
+         path is spelled with a backslash and a subdirectory, so it is exactly
+         the kind that survives on Windows and fails on a case-sensitive
+         filesystem -- say so once instead of failing silently. */
+      static bool s_bReportedMissingCover = false;
+      if(!s_bReportedMissingCover)
+      {
+        s_bReportedMissingCover = true;
+        Warning(0,0,"MakeSectorTextureDDS: cannot open '%s' -- terrain will render untextured",
+          Get3DEngine()->GetLevelFilePath("terrain\\cover.ctc"));
+      }
       return 0;
+    }
 
     GetSystem()->GetIPak()->FRead(&m_pTerrain->m_nSectorTextureReadedSize, 1, 4, m_pTerrain->m_fpTerrainTextureFile);
     GetLog()->Log("  TerrainSectorTextureSize %dx%d", m_pTerrain->m_nSectorTextureReadedSize, m_pTerrain->m_nSectorTextureReadedSize);

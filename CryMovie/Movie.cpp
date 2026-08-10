@@ -14,6 +14,10 @@
 ////////////////////////////////////////////////////////////////////////////
 
 #include "StdAfx.h"
+#if defined(__vita__)
+#include <malloc.h>
+#include <vitaGL.h>
+#endif
 #include "Movie.h"
 #include "AnimSplineTrack.h"
 #include "AnimSequence.h"
@@ -47,6 +51,8 @@ CMovieSystem::CMovieSystem( ISystem *system )
 	m_bPaused = false;
 	m_bLastFrameAnimateOnStop = true;
 	m_lastGenId = 1;
+	m_nOpenCutScenes = 0;
+	m_fOpenCutSceneTime = 0.0f;
 	m_sequenceStopBehavior = ONSTOP_GOTO_END_TIME;
 
 	system->GetIConsole()->Register( "mov_NoCutscenes",&m_mov_NoCutscenes,0,0,"Disable playing of Cut-Scenes" );
@@ -361,7 +367,10 @@ void CMovieSystem::PlaySequence( IAnimSequence *seq,bool bResetFx )
 	if (seq->GetFlags() & IAnimSequence::CUT_SCENE)
 	{
 		if (m_pUser)
+		{
 			m_pUser->BeginCutScene(seq->GetFlags(),bResetFx);
+			++m_nOpenCutScenes;
+		}
 	}
 
 	seq->Activate();
@@ -412,7 +421,11 @@ void CMovieSystem::StopSequence( IAnimSequence *seq )
 			if (seq->GetFlags() & IAnimSequence::CUT_SCENE)
 			{
 				if (m_pUser)
+				{
 					m_pUser->EndCutScene();
+					if (m_nOpenCutScenes > 0)
+						--m_nOpenCutScenes;
+				}
 			}
 			break;
 		}
@@ -528,7 +541,29 @@ void CMovieSystem::Update( float dt )
 
 	// cap delta time.
 	dt = max( 0,min(0.5f,dt) );
-	
+
+#if defined(__vita__)
+	/* A cut scene that "focuses the camera but never stops" is either a sequence
+	   whose time is not advancing or one whose end is never reached.  Those are
+	   very different bugs and look the same on screen, so report the sequence's
+	   own clock against its range once a second while anything is playing. */
+	{
+		static float s_fMovieReportAt = 0.0f;
+		s_fMovieReportAt -= dt;
+		if (s_fMovieReportAt <= 0.0f && !m_playingSequences.empty() && m_system && m_system->GetILog())
+		{
+			s_fMovieReportAt = 1.0f;
+			for (PlayingSequences::iterator rit = m_playingSequences.begin(); rit != m_playingSequences.end(); ++rit)
+			{
+				Range r = rit->sequence->GetTimeRange();
+				m_system->GetILog()->LogToFile("\001[VITA][MOVIE] playing '%s' t=%.2f range=[%.2f..%.2f] flags=0x%x dt=%.4f openCutScenes=%d",
+					rit->sequence->GetName(), rit->time, r.start, r.end,
+					(unsigned)rit->sequence->GetFlags(), dt, m_nOpenCutScenes);
+			}
+		}
+	}
+#endif
+
 	PlayingSequences::iterator next;
 	for (PlayingSequences::iterator it = m_playingSequences.begin(); it != m_playingSequences.end(); it = next)
 	{
@@ -576,6 +611,50 @@ void CMovieSystem::Update( float dt )
 	{
 		StopSequence( stopSequences[i] );
 	}
+
+	/* Safety net.  BeginCutScene takes the player's controls away -- action map
+	   "player_dead", physics and AI off -- and only EndCutScene gives them
+	   back.  Any path that drops a sequence out of m_playingSequences without
+	   going through InternalStopSequence (a level reset or a script stopping
+	   the movie system mid-scene) therefore strands the player with no way to
+	   move for the rest of the session.  Nothing playing means no cut scene can
+	   still be in progress, so close any that are still open. */
+	if (m_pUser && m_nOpenCutScenes > 0 && m_playingSequences.empty())
+	{
+		while (m_nOpenCutScenes > 0)
+		{
+			m_pUser->EndCutScene();
+			--m_nOpenCutScenes;
+		}
+	}
+
+	/* Second safety valve, for the case the one above cannot catch: a sequence
+	   that is still "playing" but is never going to finish, or one whose camera
+	   does not animate.  There is no skip binding on this platform, so without
+	   a ceiling the player simply loses control of the game.  No cut scene in
+	   the campaign runs anywhere near this long, so hitting it always means
+	   something is wrong -- end the scene and give the controls back. */
+	if (m_pUser && m_nOpenCutScenes > 0)
+	{
+		const float kMaxCutSceneSeconds = 90.0f;
+		m_fOpenCutSceneTime += dt;
+		if (m_fOpenCutSceneTime > kMaxCutSceneSeconds)
+		{
+			if (m_system && m_system->GetILog())
+				m_system->GetILog()->LogToFile(
+					"\001[VITA][MOVIE] cut scene ran past %.0fs -- forcing it to end and restoring control",
+					kMaxCutSceneSeconds);
+			StopAllSequences();
+			while (m_nOpenCutScenes > 0)
+			{
+				m_pUser->EndCutScene();
+				--m_nOpenCutScenes;
+			}
+			m_fOpenCutSceneTime = 0.0f;
+		}
+	}
+	else
+		m_fOpenCutSceneTime = 0.0f;
 }
 
 //////////////////////////////////////////////////////////////////////////

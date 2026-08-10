@@ -5,6 +5,7 @@
 
 #include "RenderPCH.h"
 #include "VitaRenderer.h"
+#include <CryHeaders.h>
 
 #if defined(LINUX)
 #include <vitaGL.h>
@@ -13,6 +14,7 @@
 #include <CRE2DQuad.h>
 #include <CREScreenProcess.h>
 #include <CRETerrainSector.h>
+#include <CREOcLeaf.h>
 #endif
 
 CVitaRenderer *gcpVitaRenderer = NULL;
@@ -27,13 +29,429 @@ ISystem  *iSystem;
 int *pTest_int;
 IPhysicalWorld *pIPhysicalWorld;
 
+/* CRenderer normally owns and registers the renderer console variables from
+   RenderDll/Common/Renderer.cpp.  The Vita backend intentionally does not
+   derive from that desktop renderer (doing so would pull the Cg/D3D pipeline
+   into the executable), but Cry3DEngine still queries the screen-effect
+   variables directly.  Keep the original console contract with stable
+   backing storage.  Expensive desktop post effects default off on Vita. */
+static int s_vitaResetScreenFx = 0;
+static int s_vitaRenderMode = 0;
+static int s_vitaGlare = 0;
+static int s_vitaGlareQuality = 0;
+static int s_vitaMotionBlur = 0;
+static float s_vitaMotionBlurAmount = 0.0f;
+static int s_vitaMotionBlurDisplace = 0;
+static int s_vitaDisableSfx = 1;
+static int s_vitaScreenColorTransfer = 0;
+/* CRenderer normally registers these too.  Gameplay weapon/HUD scripts read
+   r_TexResolution directly during OnInit; leaving it undefined aborted the
+   player's entire weapon initialization in the retail scripts.  The wider
+   set keeps the unmodified video-options scripts valid and selects sensible
+   Vita-cost defaults for effects this compact backend does not implement. */
+static int s_vitaTexResolution = 2;
+static int s_vitaTexBumpResolution = 2;
+static int s_vitaTexSkyResolution = 2;
+static int s_vitaTexAnisotropy = 1;
+static int s_vitaScopeLensFx = 0;
+static int s_vitaFsaa = 0;
+static int s_vitaFsaaSamples = 0;
+static int s_vitaFsaaQuality = 0;
+static int s_vitaVsync = 1;
+/* Render at the panel's native 960x544.  Rendering at 640x368 and letting the
+   display controller scale up is the cheapest frame-rate lever available, but
+   that scaler is a plain bilinear filter: everything picks up a soft, grainy
+   cast and the HUD text stops being readable, which is too high a price.  With
+   static geometry now living in GPU buffer objects the fill-rate saving is no
+   longer the deciding factor.  Override with -DFARCRY_VITA_RENDER_SCALE=66 to
+   trade sharpness back for speed. */
+#define VITA_RENDER_WIDTH  960
+#define VITA_RENDER_HEIGHT 544
+
+static int s_vitaWidth = VITA_RENDER_WIDTH;
+static int s_vitaHeight = VITA_RENDER_HEIGHT;
+static int s_vitaColorBits = 32;
+static int s_vitaFullscreen = 1;
+static int s_vitaBeams = 0;
+static int s_vitaCheckSunVis = 0;
+static int s_vitaCoronas = 0;
+static int s_vitaFlares = 0;
+static int s_vitaProcFlares = 0;
+static int s_vitaCryvisionType = 0;
+static int s_vitaDetailTextures = 1;
+static int s_vitaDetailNumLayers = 1;
+static int s_vitaEnvCMResolution = 0;
+static int s_vitaEnvTexResolution = 0;
+static int s_vitaEnvLightCMSize = 4;
+static int s_vitaHDRLevel = 0;
+static int s_vitaHDRRendering = 0;
+static int s_vitaHeatHaze = 0;
+static int s_vitaQualityBump = 0;
+static int s_vitaQualityReflection = 0;
+static int s_vitaSelfShadow = 0;
+static int s_vitaShadowBlur = 0;
+static int s_vitaVegetationPerPixel = 0;
+static int s_vitaVolumetricFog = 0;
+static int s_vitaWaterReflections = 0;
+static int s_vitaWaterRefractions = 0;
+static float s_vitaBrightness = 0.5f;
+static float s_vitaContrast = 0.5f;
+static float s_vitaGamma = 1.0f;
+static float s_vitaCoronaFade = 0.5f;
+static float s_vitaDetailDistance = 4.0f;
+static float s_vitaEnvCMUpdate = 1.0f;
+static float s_vitaEnvLCMUpdate = 1.0f;
+static float s_vitaEnvTexUpdate = 1.0f;
+static float s_vitaWaterUpdateFactor = 0.05f;
+static bool s_vitaFogEnabled = false;
+static float s_vitaFogDensity = 0.0f;
+static float s_vitaFogStart = 0.0f;
+static float s_vitaFogEnd = 1000.0f;
+static int s_vitaFogMode = R_FOGMODE_LINEAR;
+static CFColor s_vitaFogColor(0.5f, 0.5f, 0.5f, 1.0f);
+
+static void RegisterVitaRendererCVars()
+{
+	if (!iConsole)
+		return;
+
+#define VITA_REGISTER_INT(name, storage, value) \
+	do { if (!iConsole->GetCVar(name)) iConsole->Register(name, &(storage), value, 0); } while (0)
+#define VITA_REGISTER_FLOAT(name, storage, value) \
+	do { if (!iConsole->GetCVar(name)) iConsole->Register(name, &(storage), value, 0); } while (0)
+	VITA_REGISTER_INT("r_ResetScreenFx", s_vitaResetScreenFx, 0);
+	VITA_REGISTER_INT("r_RenderMode", s_vitaRenderMode, 0);
+	VITA_REGISTER_INT("r_Glare", s_vitaGlare, 0);
+	VITA_REGISTER_INT("r_GlareQuality", s_vitaGlareQuality, 0);
+	VITA_REGISTER_INT("r_MotionBlur", s_vitaMotionBlur, 0);
+	VITA_REGISTER_FLOAT("r_MotionBlurAmount", s_vitaMotionBlurAmount, 0.0f);
+	VITA_REGISTER_INT("r_MotionBlurDisplace", s_vitaMotionBlurDisplace, 0);
+	VITA_REGISTER_INT("r_DisableSfx", s_vitaDisableSfx, 1);
+	VITA_REGISTER_INT("r_ScreenColorTransfer", s_vitaScreenColorTransfer, 0);
+	VITA_REGISTER_INT("r_TexResolution", s_vitaTexResolution, 2);
+	VITA_REGISTER_INT("r_TexBumpResolution", s_vitaTexBumpResolution, 2);
+	VITA_REGISTER_INT("r_TexSkyResolution", s_vitaTexSkyResolution, 2);
+	VITA_REGISTER_INT("r_Texture_Anisotropic_Level", s_vitaTexAnisotropy, 1);
+	VITA_REGISTER_INT("r_ScopeLens_fx", s_vitaScopeLensFx, 0);
+	VITA_REGISTER_INT("r_FSAA", s_vitaFsaa, 0);
+	VITA_REGISTER_INT("r_FSAA_samples", s_vitaFsaaSamples, 0);
+	VITA_REGISTER_INT("r_FSAA_quality", s_vitaFsaaQuality, 0);
+	VITA_REGISTER_INT("r_VSync", s_vitaVsync, 1);
+	VITA_REGISTER_INT("r_Width", s_vitaWidth, VITA_RENDER_WIDTH);
+	VITA_REGISTER_INT("r_Height", s_vitaHeight, VITA_RENDER_HEIGHT);
+	VITA_REGISTER_INT("r_ColorBits", s_vitaColorBits, 32);
+	VITA_REGISTER_INT("r_Fullscreen", s_vitaFullscreen, 1);
+	VITA_REGISTER_INT("r_Beams", s_vitaBeams, 0);
+	VITA_REGISTER_INT("r_checkSunVis", s_vitaCheckSunVis, 0);
+	VITA_REGISTER_INT("r_Coronas", s_vitaCoronas, 0);
+	VITA_REGISTER_INT("r_Flares", s_vitaFlares, 0);
+	VITA_REGISTER_INT("r_ProcFlares", s_vitaProcFlares, 0);
+	VITA_REGISTER_INT("r_CryvisionType", s_vitaCryvisionType, 0);
+	VITA_REGISTER_INT("r_DetailTextures", s_vitaDetailTextures, 1);
+	VITA_REGISTER_INT("r_DetailNumLayers", s_vitaDetailNumLayers, 1);
+	VITA_REGISTER_INT("r_EnvCMResolution", s_vitaEnvCMResolution, 0);
+	VITA_REGISTER_INT("r_EnvTexResolution", s_vitaEnvTexResolution, 0);
+	VITA_REGISTER_INT("r_EnvLightCMSize", s_vitaEnvLightCMSize, 4);
+	VITA_REGISTER_INT("r_HDRLevel", s_vitaHDRLevel, 0);
+	VITA_REGISTER_INT("r_HDRRendering", s_vitaHDRRendering, 0);
+	VITA_REGISTER_INT("r_HeatHaze", s_vitaHeatHaze, 0);
+	VITA_REGISTER_INT("r_Quality_BumpMapping", s_vitaQualityBump, 0);
+	VITA_REGISTER_INT("r_Quality_Reflection", s_vitaQualityReflection, 0);
+	VITA_REGISTER_INT("r_SelfShadow", s_vitaSelfShadow, 0);
+	VITA_REGISTER_INT("r_ShadowBlur", s_vitaShadowBlur, 0);
+	VITA_REGISTER_INT("r_Vegetation_PerpixelLight", s_vitaVegetationPerPixel, 0);
+	VITA_REGISTER_INT("r_VolumetricFog", s_vitaVolumetricFog, 0);
+	VITA_REGISTER_INT("r_WaterReflections", s_vitaWaterReflections, 0);
+	VITA_REGISTER_INT("r_WaterRefractions", s_vitaWaterRefractions, 0);
+	VITA_REGISTER_FLOAT("r_Brightness", s_vitaBrightness, 0.5f);
+	VITA_REGISTER_FLOAT("r_Contrast", s_vitaContrast, 0.5f);
+	VITA_REGISTER_FLOAT("r_Gamma", s_vitaGamma, 1.0f);
+	VITA_REGISTER_FLOAT("r_CoronaFade", s_vitaCoronaFade, 0.5f);
+	VITA_REGISTER_FLOAT("r_DetailDistance", s_vitaDetailDistance, 4.0f);
+	VITA_REGISTER_FLOAT("r_EnvCMupdateInterval", s_vitaEnvCMUpdate, 1.0f);
+	VITA_REGISTER_FLOAT("r_EnvLCMupdateInterval", s_vitaEnvLCMUpdate, 1.0f);
+	VITA_REGISTER_FLOAT("r_EnvTexUpdateInterval", s_vitaEnvTexUpdate, 1.0f);
+	VITA_REGISTER_FLOAT("r_WaterUpdateFactor", s_vitaWaterUpdateFactor, 0.05f);
+#undef VITA_REGISTER_FLOAT
+#undef VITA_REGISTER_INT
+}
+
+/* These definitions and initialisation rules are the CCObject contract from
+   Crytek's RenderDll/Common/Renderer.cpp.  The former Vita stub returned NULL
+   from EF_GetObject, so the first bending vegetation object wrote through
+   address zero and dispatched a null AddWaves vtable entry. */
+TArray<SWaveForm2> CCObject::m_Waves;
+MatrixArray16 CCObject::m_ObjMatrices;
+
+void CCObject::Init()
+{
+	m_ObjFlags = 0;
+	if (m_ShaderParams && m_bShaderParamCreatedInRenderer)
+	{
+		m_bShaderParamCreatedInRenderer = false;
+		delete m_ShaderParams;
+	}
+	m_ShaderParams = NULL;
+	m_nLMId = m_nLMDirId = m_nOcclId = m_nHDRLMId = 0;
+	m_InvMatrixId = -1;
+	m_VPMatrixId = -1;
+	m_RE = NULL;
+	m_EF = NULL;
+	m_CustomData = NULL;
+	m_DynLMMask = 0;
+	m_fDistanceToCam = -1.0f;
+	m_RenderState = 0;
+	m_fHeatFactor = 1.0f;
+	m_NumCM = -1;
+	m_SortId = 0;
+	m_NumWFX = 0;
+	m_NumWFY = 0;
+	m_fLightFadeTime = 0.0f;
+	m_pShadowCasters = NULL;
+	m_bVisible = false;
+	m_AmbColor = Vec3d(1.0f, 1.0f, 1.0f);
+	m_Color = CFColor(1.0f);
+	m_pCharInstance = NULL;
+	m_pLightImage = NULL;
+	m_pLMTCBufferO = NULL;
+	m_nScissorX1 = m_nScissorX2 = m_nScissorY1 = m_nScissorY2 = 0;
+}
+
+CCObject::~CCObject()
+{
+	if (m_ShaderParams && m_bShaderParamCreatedInRenderer)
+		delete m_ShaderParams;
+}
+
+void CCObject::SetShaderFloat(const char *Name, float Val)
+{
+	string name = Name ? Name : "";
+	std::transform(name.begin(), name.end(), name.begin(), tolower);
+	if (!m_ShaderParams)
+		m_ShaderParams = new TArray<SShaderParam>;
+	int i;
+	for (i = 0; i < m_ShaderParams->Num(); ++i)
+		if (!strcmp(name.c_str(), m_ShaderParams->Get(i).m_Name))
+			break;
+	if (i == m_ShaderParams->Num())
+	{
+		SShaderParam pr;
+		memset(&pr, 0, sizeof(pr));
+		strncpy(pr.m_Name, name.c_str(), sizeof(pr.m_Name) - 1);
+		m_ShaderParams->AddElem(pr);
+	}
+	SShaderParam *pr = &m_ShaderParams->Get(i);
+	pr->m_Type = eType_FLOAT;
+	pr->m_Value.m_Float = Val;
+	m_bShaderParamCreatedInRenderer = true;
+}
+
+void CCObject::AddWaves(SWaveForm2 **pWF)
+{
+	// The desktop pipeline preallocates 32 shared wave slots; retain that
+	// reserved prefix because zero is the object's "no wave" sentinel.
+	if (!m_Waves.Num())
+		m_Waves.Create(32);
+
+	int n1 = m_NumWFX;
+	int n2 = m_NumWFY;
+	if (!n1)
+	{
+		n1 = m_Waves.Num();
+		m_Waves.AddIndex(1);
+		m_NumWFX = n1;
+		memset(&m_Waves[n1], 0, sizeof(SWaveForm2));
+		m_Waves[n1].m_eWFType = eWF_Sin;
+	}
+	if (!n2)
+	{
+		n2 = m_Waves.Num();
+		m_Waves.AddIndex(1);
+		m_NumWFY = n2;
+		memset(&m_Waves[n2], 0, sizeof(SWaveForm2));
+		m_Waves[n2].m_eWFType = eWF_Sin;
+	}
+	if (pWF)
+	{
+		pWF[0] = &m_Waves[n1];
+		pWF[1] = &m_Waves[n2];
+	}
+}
+
+void CCObject::RemovePermanent()
+{
+	m_ObjFlags |= FOB_REMOVED;
+}
+
+static std::string LookupVitaSkyBoxBase(const char *shaderName)
+{
+	static bool parsed = false;
+	static bool reportedWaiting = false;
+	static std::map<std::string, std::string> skyBoxes;
+	if (!parsed)
+	{
+		ICryPak *pak = iSystem ? iSystem->GetIPak() : NULL;
+		FILE *file = pak ? pak->FOpen("Shaders/Scripts/CryShaders/Sky.csl", "rb", ICryPak::FOPEN_HINT_QUIET) : NULL;
+		if (!file && pak)
+			file = pak->FOpen("Shaders\\Scripts\\CryShaders\\Sky.csl", "rb", ICryPak::FOPEN_HINT_QUIET);
+		if (!file && pak)
+			file = pak->FOpen("Scripts/CryShaders/Sky.csl", "rb", ICryPak::FOPEN_HINT_QUIET);
+		if (!file && pak)
+			file = pak->FOpen("Scripts\\CryShaders\\Sky.csl", "rb", ICryPak::FOPEN_HINT_QUIET);
+		if (file)
+		{
+			/* Do not poison the cache when early bootstrap shaders are made
+			   before Shaders.pak is mounted.  Only a real opened source file
+			   makes this a completed parse. */
+			parsed = true;
+			pak->FSeek(file, 0, SEEK_END);
+			long length = pak->FTell(file);
+			pak->FSeek(file, 0, SEEK_SET);
+			if (length > 0 && length < 1024 * 1024)
+			{
+				std::vector<char> bytes((size_t)length + 1, 0);
+				if (pak->FRead(&bytes[0], 1, (size_t)length, file) == (size_t)length)
+				{
+					std::string text(&bytes[0], (size_t)length);
+					size_t shaderPos = 0;
+					while ((shaderPos = text.find("Shader", shaderPos)) != std::string::npos)
+					{
+						size_t quote0 = text.find('\'', shaderPos + 6);
+						size_t quote1 = quote0 == std::string::npos ? std::string::npos : text.find('\'', quote0 + 1);
+						if (quote0 == std::string::npos || quote1 == std::string::npos)
+							break;
+						size_t nextShader = text.find("Shader", quote1 + 1);
+						size_t skyPos = text.find("SkyBox", quote1 + 1);
+						if (skyPos != std::string::npos && (nextShader == std::string::npos || skyPos < nextShader))
+						{
+							size_t equals = text.find('=', skyPos + 6);
+							if (equals != std::string::npos && (nextShader == std::string::npos || equals < nextShader))
+							{
+								size_t value0 = text.find_first_not_of(" \t\r\n", equals + 1);
+								size_t value1 = value0 == std::string::npos ? value0 : text.find_first_of(" \t\r\n)", value0);
+								if (value0 != std::string::npos)
+								{
+									std::string key = text.substr(quote0 + 1, quote1 - quote0 - 1);
+									std::string value = text.substr(value0, value1 == std::string::npos ? std::string::npos : value1 - value0);
+									for (size_t i = 0; i < key.size(); ++i) key[i] = (char)tolower((unsigned char)key[i]);
+									skyBoxes[key] = value;
+								}
+							}
+						}
+						shaderPos = quote1 + 1;
+					}
+				}
+			}
+			pak->FClose(file);
+			if (iLog)
+				iLog->LogToFile("\001[VITA][SKY] parsed Sky.csl: %u skyboxes", (unsigned int)skyBoxes.size());
+		}
+		else if (!reportedWaiting && iLog)
+		{
+			reportedWaiting = true;
+			iLog->LogToFile("\001[VITA][SKY] Sky.csl is not mounted yet; lookup will retry");
+		}
+	}
+
+	std::string key = shaderName ? shaderName : "";
+	for (size_t i = 0; i < key.size(); ++i) key[i] = (char)tolower((unsigned char)key[i]);
+	std::map<std::string, std::string>::const_iterator found = skyBoxes.find(key);
+	return found == skyBoxes.end() ? std::string() : found->second;
+}
+
+/* CryEngine's material manager requires a valid IShader even when the
+   platform backend uses one compact fixed-function/fallback program.  Keep
+   the engine-side metadata and reference contract intact; the Vita draw path
+   can then choose texture/blend state from SRenderShaderResources without
+   compiling the desktop Cg shader system. */
+class CVitaShader : public IShader
+{
+public:
+	CVitaShader(int id, const char *name, uint64 generationMask)
+		: m_id(id), m_refs(1), m_name(name ? name : ""), m_sort(eS_Opaque),
+		  m_flags(0), m_flags2(EF2_OPAQUE), m_flags3(0), m_renderFlags(0),
+		  m_generationMask(generationMask)
+	{
+		m_skyTextureIds[0] = m_skyTextureIds[1] = m_skyTextureIds[2] = 0;
+		if (stricmp(m_name.c_str(), "NoDraw") == 0)
+			m_flags3 |= EF3_NODRAW;
+	}
+
+	virtual int GetID() { return m_id; }
+	virtual void AddRef() { ++m_refs; }
+	virtual void Release(bool bForce=false) { if (!bForce && m_refs > 1) --m_refs; }
+	virtual int GetRefCount() { return m_refs; }
+	virtual const char *GetName() { return m_name.c_str(); }
+	virtual EF_Sort GetSort() { return m_sort; }
+	virtual int GetFlags() { return m_flags; }
+	virtual int GetFlags2() { return m_flags2; }
+	virtual int GetFlags3() { return m_flags3; }
+	virtual int GetRenderFlags() { return m_renderFlags; }
+	virtual void SetRenderFlags(int flags) { m_renderFlags = flags; }
+	virtual int GetLFlags() { return 0; }
+	virtual int GetCull() { return -1; }
+	virtual uint GetPreprocessFlags() { return 0; }
+	virtual void SetFlags3(int flags) { m_flags3 = flags; }
+	virtual bool Reload(int) { return true; }
+	virtual TArray<CRendElement *> *GetREs() { return &m_renderElements; }
+	virtual bool AddTemplate(SRenderShaderResources *, int& templateId, const char * = NULL, bool = false, uint64 = 0)
+	{
+		templateId = -1;
+		return true;
+	}
+	virtual void RemoveTemplate(int) {}
+	virtual IShader *GetTemplate(int) { return this; }
+	virtual SEfTemplates *GetTemplates() { return NULL; }
+	virtual TArray<SShaderParam>& GetPublicParams() { return m_publicParams; }
+	virtual int GetTexId() { return 0; }
+	virtual ITexPic *GetBaseTexture(int *, int *) { return NULL; }
+	virtual unsigned int GetUsedTextureTypes() { return 0; }
+	virtual int GetVertexFormat() { return VERTEX_FORMAT_P3F_COL4UB_TEX2F; }
+	virtual int Size(int) { return sizeof(*this) + m_name.size(); }
+	virtual uint64 GetGenerationMask() { return m_generationMask; }
+	virtual SShaderGen *GetGenerationParams() { return NULL; }
+	const std::string &GetSkyBoxBase()
+	{
+		/* Shaders are constructed during renderer bootstrap, before Shaders.pak
+		   is guaranteed to be mounted. Resolve lazily so retail mission skies
+		   are not permanently cached as empty. */
+		if (m_skyBoxBase.empty())
+			m_skyBoxBase = LookupVitaSkyBoxBase(m_name.c_str());
+		return m_skyBoxBase;
+	}
+	int GetSkyTextureId(int index) const { return index >= 0 && index < 3 ? m_skyTextureIds[index] : 0; }
+	void SetSkyTextureId(int index, int id) { if (index >= 0 && index < 3) m_skyTextureIds[index] = id; }
+
+private:
+	int m_id;
+	int m_refs;
+	std::string m_name;
+	EF_Sort m_sort;
+	int m_flags;
+	int m_flags2;
+	int m_flags3;
+	int m_renderFlags;
+	uint64 m_generationMask;
+	std::string m_skyBoxBase;
+	int m_skyTextureIds[3];
+	TArray<CRendElement *> m_renderElements;
+	TArray<SShaderParam> m_publicParams;
+};
+
 /* Vita: deliberately NOT defining GetISystem() here -- CrySystem/System.cpp
    owns the one real definition (see its comment); a second one here would
    silently win under -Wl,--allow-multiple-definition and reintroduce the
    exact bug fixed earlier this session (see git log). */
 
 CVitaRenderer::CVitaRenderer()
-	: m_nWidth(0), m_nHeight(0), m_nColorBpp(32), m_nDepthBpp(24), m_nStencilBpp(8), m_cType(0), m_nDynVBCursor(0)
+	: m_nWidth(0), m_nHeight(0), m_nColorBpp(32), m_nDepthBpp(24), m_nStencilBpp(8), m_cType(0),
+	  m_nViewportX(0), m_nViewportY(0), m_nViewportWidth(0), m_nViewportHeight(0),
+	  // Black, as the retail backends clear to. The dark blue this used to be
+	  // was a bring-up aid, and it is what shows through in the gap between the
+	  // loading screen being torn down and the first rendered game frame.
+	  m_nFrameId(0), m_vClearColor(0.0f, 0.0f, 0.0f), m_nDynVBCursor(0),
+	  m_nActiveLights(0),
+	  m_nCullMode(R_CULL_BACK), m_nNextShaderId(1), m_nTempRenderObjectCursor(0)
 {
 	sceClibPrintf("[BOOTTRACE] CVitaRenderer ctor entered\n");
 	gcpVitaRenderer = this;
@@ -43,23 +461,97 @@ CVitaRenderer::CVitaRenderer()
 CVitaRenderer::~CVitaRenderer()
 {
 	ShutDown(false);
+	for (size_t i = 0; i < m_TempRenderObjects.size(); ++i)
+		delete m_TempRenderObjects[i];
+	for (size_t i = 0; i < m_PermanentRenderObjects.size(); ++i)
+		delete m_PermanentRenderObjects[i];
+	for (std::map<std::string, CVitaShader *>::iterator it = m_ShaderByName.begin(); it != m_ShaderByName.end(); ++it)
+		delete it->second;
+	m_ShaderByName.clear();
 }
 
 WIN_HWND CVitaRenderer::Init(int x, int y, int width, int height, unsigned int cbpp, int zbpp, int sbits, bool fullscreen, WIN_HINSTANCE hinst, WIN_HWND Glhwnd, WIN_HDC Glhdc, WIN_HGLRC hGLrc, bool bReInit)
 {
 	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init entered, width=%d height=%d cbpp=%u\n", width, height, cbpp);
-	m_nWidth = width;
-	m_nHeight = height;
+	RegisterVitaRendererCVars();
 	m_nColorBpp = cbpp;
 	m_nDepthBpp = zbpp;
 	m_nStencilBpp = sbits;
 #if defined(LINUX)
-	/* Vita: real vitaGL context + framebuffer -- same call validated
-	   standalone by vita_bringup/src/main.c. */
+	/* Render at 640x368 and let the display controller scale to the panel.
+	   FARCRY_VITA_RENDER_SCALE (percent of the native 960x544) overrides it if
+	   the CMake option is set; 100 gives the full panel resolution. */
+	width = VITA_RENDER_WIDTH;
+	height = VITA_RENDER_HEIGHT;
+#if defined(FARCRY_VITA_RENDER_SCALE_PERCENT)
+	{
+		const int nScale = FARCRY_VITA_RENDER_SCALE_PERCENT;
+		if (nScale > 0 && nScale <= 100)
+		{
+			// Keep both dimensions even: GXM dislikes odd render-target extents.
+			width = ((960 * nScale / 100) + 1) & ~1;
+			height = ((544 * nScale / 100) + 1) & ~1;
+		}
+	}
+#endif
+	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init: rendering at %dx%d\n", width, height);
+	s_vitaWidth = width;
+	s_vitaHeight = height;
+#endif
+	m_nWidth = width;
+	m_nHeight = height;
+	m_nViewportX = m_nViewportY = 0;
+	m_nViewportWidth = width;
+	m_nViewportHeight = height;
+#if defined(LINUX)
+	/* Keep a real CryEngine-sized main-RAM reserve.  vitaGL's simple vglInit
+	   consumes virtually every free pool except 16 MiB and enables 4x MSAA;
+	   that is unsuitable for Far Cry's post-context level allocations on
+	   512 MiB/128 MiB Vita hardware.  The threshold API is the same upstream
+	   path used by d3es-vita, with no MSAA and CDRAM kept available for BCn
+	   textures. */
+	/* Registered here rather than lazily on first use so System.Cfg /
+	   SystemCfgOverride.Cfg can set it -- console variables created after the
+	   config is parsed never see its value. */
+	/* Baked lightmaps.  The blotching this used to produce came from binding a
+	   coordinate array that did not cover the mesh being drawn; EF_AddEf now
+	   checks that before using it, so a mismatched brush is drawn unlit rather
+	   than wrong.  Set r_lightmaps 0 to compare against no baked lighting. */
+	if (iConsole && !iConsole->GetCVar("r_lightmaps"))
+		iConsole->CreateVariable("r_lightmaps", "1", 0,
+			"Modulate baked lightmaps onto world geometry");
+
 	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init: before vglInit\n");
-	vglInit(0x400000);
+	/* This main-RAM pool competes with the engine heap for the application's
+	   RAM budget, so it is trimmed from the 160 MiB it used to take down to
+	   96 MiB, which measured fine through a full Training load and gameplay.
+	   Together with the 224 MiB heap that brings the main-RAM total from about
+	   400 MiB to roughly 337 MiB.  Raising CDRAM to hold the textures instead
+	   was tried and does not work: 112 MiB of CDRAM crashes at the first
+	   rendered frame, so it stays at 8 MiB.  See engine_port/main.cpp. */
+	GLboolean vglResolutionFallback = vglInitWithCustomThreshold(
+		0x200000, width, height,
+		64 * 1024 * 1024,
+		8 * 1024 * 1024,
+		8 * 1024 * 1024,
+		0x8C6000, // upstream vitaGL's full common-dialog pool: reserve it
+		SCE_GXM_MULTISAMPLE_NONE);
+	// vitaGL returns whether it had to fall back to a smaller display
+	// resolution, not a conventional success boolean (GL_FALSE is the
+	// normal 960x544 result).
+	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init: resolutionFallback=%d\n", (int)vglResolutionFallback);
+	sceClibPrintf("[VITAMEM] vitaGL pools ram=%u/%u cdram=%u/%u phycont=%u/%u\n",
+		(unsigned)vglMemFree(VGL_MEM_RAM), (unsigned)vglMemTotal(VGL_MEM_RAM),
+		(unsigned)vglMemFree(VGL_MEM_VRAM), (unsigned)vglMemTotal(VGL_MEM_VRAM),
+		(unsigned)vglMemFree(VGL_MEM_SLOW), (unsigned)vglMemTotal(VGL_MEM_SLOW));
 	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init: after vglInit, before glViewport\n");
 	glViewport(0, 0, width, height);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LEQUAL);
+	glDepthMask(GL_TRUE);
+	glDisable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
+	glDisable(GL_SCISSOR_TEST);
 	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init: after glViewport\n");
 	return (WIN_HWND)this; // just checked against NULL by callers
 #else
@@ -83,6 +575,15 @@ void CVitaRenderer::PostLoad()
 {
 }
 
+/* Materials whose diffuse has not been loaded yet get loaded from inside the
+   draw call.  That is a file read, a decompress and a full mip-chain upload
+   happening in the middle of a frame, and a fresh view can need dozens at
+   once -- a visible stall rather than a hitch.  Cap how many may be loaded per
+   frame: anything over budget draws white for that frame and is picked up on
+   the next, so the cost spreads instead of spiking. */
+static int g_nLazyTextureLoadsThisFrame = 0;
+static const int kMaxLazyTextureLoadsPerFrame = 2;
+
 void CVitaRenderer::BeginFrame()
 {
 #if defined(LINUX)
@@ -90,15 +591,38 @@ void CVitaRenderer::BeginFrame()
 	   first genuine on-screen output driven by the actual engine, not a
 	   standalone test -- everything else in this class is a mechanical
 	   IRenderer stub (see VitaRenderer.h). */
-	glClearColor(0.05f, 0.05f, 0.15f, 1.0f);
-	glClear(GL_COLOR_BUFFER_BIT);
+	++m_nFrameId;
+	m_nDynVBCursor = 0;
+	g_nLazyTextureLoadsThisFrame = 0;
+	glViewport(m_nViewportX, m_nViewportY, m_nViewportWidth, m_nViewportHeight);
+	glDepthMask(GL_TRUE);
+	glClearColor(m_vClearColor.x, m_vClearColor.y, m_vClearColor.z, 1.0f);
+	glClearDepthf(1.0f);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+#if defined(VITA_DEBUG_CLEARCOLOR)
+	/* Ground truth for the white-sky bug: how many frames actually reach the
+	   screen cleared to white. Should be zero once the shadow pass restores
+	   the colour it borrows (Cry3DEngine/ObjManShadows.cpp). */
+	{
+		static int s_nFrames = 0, s_nWhiteFrames = 0;
+		if (m_vClearColor.x > 0.99f && m_vClearColor.y > 0.99f && m_vClearColor.z > 0.99f)
+			++s_nWhiteFrames;
+		if ((++s_nFrames % 300) == 0 && iLog)
+			iLog->LogToFile("\001[VITA CLEARSTAT] frames=%d whiteFrames=%d current=%.3f %.3f %.3f",
+				s_nFrames, s_nWhiteFrames, m_vClearColor.x, m_vClearColor.y, m_vClearColor.z);
+	}
+#endif
 #endif
 }
 
 void CVitaRenderer::Update()
 {
 #if defined(LINUX)
+	// Vita: TEMPORARY verification capture -- one real screenshot of frame
+	// 90 (skips past the first couple of still-loading frames), written to
+	// a real, host-visible path. Reverted once no longer needed.
+
 	// Vita: present the frame cleared in BeginFrame() above.
 	vglSwapBuffers(GL_FALSE);
 #endif
@@ -118,21 +642,384 @@ WIN_HWND CVitaRenderer::GetHWND() { return (WIN_HWND)this; }
 // VitaRenderer.h) -- honest no-ops, not yet implemented.
 //////////////////////////////////////////////////////////////////////
 
+/* Vita: real matrix-stack + camera plumbing. CryEngine's per-object draw
+   pattern is PushMatrix(); [Rotate/Translate/Scale/Mult]Matrix(...);
+   DrawBuffer(...); PopMatrix() -- ordinary GL_MODELVIEW composition on top
+   of whatever SetCamera last loaded as the base, exactly like the real
+   reference GL backend (RenderDll/XRenderOGL/GL_Renderer.cpp's
+   CGLRenderer::PushMatrix/RotateMatrix/etc, all thin glPushMatrix/
+   glRotatef/etc wraps) -- not reimplemented from scratch, just the same
+   calls Draw2dImage already makes for GL_PROJECTION, applied to
+   GL_MODELVIEW instead. */
+void CVitaRenderer::PushMatrix()
+{
+#if defined(LINUX)
+	glMatrixMode(GL_MODELVIEW);
+	glPushMatrix();
+#endif
+}
+void CVitaRenderer::PopMatrix()
+{
+#if defined(LINUX)
+	glMatrixMode(GL_MODELVIEW);
+	glPopMatrix();
+#endif
+}
+void CVitaRenderer::MultMatrix(float * mat)
+{
+#if defined(LINUX)
+	glMatrixMode(GL_MODELVIEW);
+	glMultMatrixf(mat);
+#endif
+}
+void CVitaRenderer::LoadMatrix(const Matrix44 * src)
+{
+#if defined(LINUX)
+	glMatrixMode(GL_MODELVIEW);
+	if (src)
+		glLoadMatrixf(src->GetData());
+	else
+		glLoadIdentity();
+#endif
+}
+void CVitaRenderer::RotateMatrix(float a, float x, float y, float z)
+{
+#if defined(LINUX)
+	glMatrixMode(GL_MODELVIEW);
+	glRotatef(a, x, y, z);
+#endif
+}
+void CVitaRenderer::RotateMatrix(const Vec3 & angles)
+{
+#if defined(LINUX)
+	glMatrixMode(GL_MODELVIEW);
+	glRotatef(angles.z, 0, 0, 1);
+	glRotatef(angles.y, 0, 1, 0);
+	glRotatef(angles.x, 1, 0, 0);
+#endif
+}
+void CVitaRenderer::TranslateMatrix(float x, float y, float z)
+{
+#if defined(LINUX)
+	glMatrixMode(GL_MODELVIEW);
+	glTranslatef(x, y, z);
+#endif
+}
+void CVitaRenderer::TranslateMatrix(const Vec3 & pos)
+{
+#if defined(LINUX)
+	glMatrixMode(GL_MODELVIEW);
+	glTranslatef(pos.x, pos.y, pos.z);
+#endif
+}
+void CVitaRenderer::ScaleMatrix(float x, float y, float z)
+{
+#if defined(LINUX)
+	glMatrixMode(GL_MODELVIEW);
+	glScalef(x, y, z);
+#endif
+}
+
+/* Vita: real camera -> GL_PROJECTION/GL_MODELVIEW setup. vitaGL has no GLU,
+   so this is glFrustum instead of the reference renderer's gluPerspective
+   (RenderDll/XRenderOGL/GL_Renderer.cpp::SetCamera) -- same math (fovy =
+   horizontal fov * ProjRatio, aspect = 1/ProjRatio, per that function's own
+   comment), just expressed as frustum bounds instead of a fovy+aspect pair.
+   GL_MODELVIEW is loaded from CCamera::GetVCMatrixD3D9(), the engine's own
+   ready-made, already-axis-corrected (CryEngine is Y-forward/Z-up; GL
+   expects the standard convention) view matrix -- see Cry_Camera.h:358 and
+   the same accessor's use in the reference SetCamera. */
+/* Vita: TEMPORARY diagnostic -- standard-convention OpenGL camera (eye at
+   origin, looking down -Z, world translated by -dist) with NO dependency on
+   CCamera's Y-forward/Z-up axis convention or GetVCMatrixD3D9's correction
+   matrix, to rule those out as the reason DrawBuffer's real, error-free
+   (glGetError()==0) draws aren't landing on screen (confirmed via a real
+   glReadPixels capture showing black despite successful draw calls).
+   Reverted once no longer needed. */
+extern "C" void Vita_DebugSetSimpleCamera(float dist, int width, int height)
+{
+#if defined(LINUX)
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	float aspect = (float)width / (float)height;
+	float fNear = 0.5f, fFar = 100.0f;
+	float fFovYRad = 60.0f * 3.14159265f / 180.0f;
+	float fTop = fNear * tanf(fFovYRad * 0.5f);
+	float fRight = fTop * aspect;
+	glFrustum(-fRight, fRight, -fTop, fTop, fNear, fFar);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glTranslatef(0.0f, 0.0f, -dist);
+	sceClibPrintf("[BOOTTRACE] Vita_DebugSetSimpleCamera: dist=%f w=%d h=%d aspect=%f fRight=%f fTop=%f\n",
+		dist, width, height, aspect, fRight, fTop);
+#endif
+}
+
+void CVitaRenderer::SetCamera(const CCamera & cam)
+{
+#if defined(LINUX)
+	m_Camera = cam;
+
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	float fNear = cam.GetZMin();
+	float fFar = cam.GetZMax();
+	float fFovY = cam.GetFov() * cam.GetProjRatio();
+	float fTop = fNear * tanf(fFovY * 0.5f);
+	float fRight = fTop / cam.GetProjRatio();
+	glFrustum(-fRight, fRight, -fTop, fTop, fNear, fFar);
+
+	glMatrixMode(GL_MODELVIEW);
+	Matrix44 mat = cam.GetVCMatrixD3D9();
+	glLoadMatrixf(mat.GetData());
+#endif
+}
+const CCamera & CVitaRenderer::GetCamera() { return m_Camera; }
+
+void CVitaRenderer::SetCullMode(int mode)
+{
+#if defined(LINUX)
+	m_nCullMode = mode;
+	if (mode == R_CULL_NONE)
+	{
+		glDisable(GL_CULL_FACE);
+	}
+	else
+	{
+		glEnable(GL_CULL_FACE);
+		// Vita: CryEngine's R_CULL_BACK/FRONT already account for its own
+		// winding convention the same way the reference GL renderer's
+		// SetCullMode does (GL_Renderer.cpp) -- back/front map straight
+		// across, no flip needed.
+		glCullFace(mode == R_CULL_FRONT ? GL_FRONT : GL_BACK);
+	}
+#endif
+}
+
 bool CVitaRenderer::SetCurrentContext(WIN_HWND hWnd) { return false; }
 bool CVitaRenderer::CreateContext(WIN_HWND hWnd, bool bAllowFSAA) { return false; }
 bool CVitaRenderer::DeleteContext(WIN_HWND hWnd) { return false; }
-int CVitaRenderer::GetFeatures() { return RFT_RGBA; }
-int CVitaRenderer::GetMaxTextureMemory() { return 0; }
+int CVitaRenderer::GetFeatures()
+{
+	/* The Vita GPU is newer than a GeForce 2, but this backend intentionally
+	   exposes CryEngine's single-texture fixed-function contract: SelectTMU and
+	   the desktop shader-template multipass pipeline are not implemented.  The
+	   stock engine has a complete authored GF2 fallback (ambient-lit terrain,
+	   translucent ocean and reduced detail layers), which is both visually
+	   correct for this renderer and appropriate for Vita's 128 MiB VRAM budget.
+	   Advertising multitexture made the retail content choose paths we silently
+	   could not execute. */
+	return RFT_HW_GF2 | RFT_RGBA | RFT_COMPRESSTEXTURE;
+}
+int CVitaRenderer::GetMaxTextureMemory() { return 128 * 1024 * 1024; }
 int CVitaRenderer::EnumDisplayFormats(TArray<SDispFormat>& Formats, bool bReset) { return 0; }
 bool CVitaRenderer::ChangeResolution(int nNewWidth, int nNewHeight, int nNewColDepth, int nNewRefreshHZ, bool bFullScreen) { return false; }
 void CVitaRenderer::FreeResources(int nFlags) { }
 void CVitaRenderer::RefreshResources(int nFlags) { }
 void CVitaRenderer::ShareResources(IRenderer * renderer) { }
-void CVitaRenderer::GetViewport(int * x, int * y, int * width, int * height) { }
-void CVitaRenderer::SetViewport(int x, int y, int width, int height) { }
-void CVitaRenderer::SetScissor(int x, int y, int width, int height) { }
+void CVitaRenderer::GetViewport(int * x, int * y, int * width, int * height)
+{
+	if (x) *x = m_nViewportX;
+	if (y) *y = m_nViewportY;
+	if (width) *width = m_nViewportWidth;
+	if (height) *height = m_nViewportHeight;
+}
+void CVitaRenderer::SetViewport(int x, int y, int width, int height)
+{
+#if defined(LINUX)
+	/* Crytek's OpenGL backend treats an all-zero call as "restore the
+	   remembered viewport" and every other call as a new remembered value. */
+	if (x || y || width || height)
+	{
+		m_nViewportX = x;
+		m_nViewportY = y;
+		m_nViewportWidth = width;
+		m_nViewportHeight = height;
+	}
+	glViewport(m_nViewportX, m_nViewportY, m_nViewportWidth, m_nViewportHeight);
+#endif
+}
+void CVitaRenderer::SetScissor(int x, int y, int width, int height)
+{
+#if defined(LINUX)
+	if (!x && !y && !width && !height)
+	{
+		glDisable(GL_SCISSOR_TEST);
+		return;
+	}
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(x, y, width, height);
+#endif
+}
 void CVitaRenderer::MakeCurrent() { }
-void CVitaRenderer::DrawTriStrip(CVertexBuffer * src, int vert_num) { }
+/* Vita: real vertex-format-generic immediate-mode draw. gBufInfoTable/
+   m_VertexSize (CryCommon/VertexFormats.h) give the real per-format byte
+   offsets/stride Crytek's own renderers use -- position is always a Vec3 at
+   offset 0 in every format (see the struct_VERTEX_FORMAT_* definitions), so
+   this one implementation covers every format the engine can hand us,
+   without hand-special-casing each one. An offset of 0 in gBufInfoTable
+   means "not present" (see that table's comment) -- safe as a sentinel
+   because position always occupies bytes 0-11 first, so no other attribute
+   can legitimately sit at offset 0 too. */
+#if defined(LINUX)
+/* True while the bound "texture" is the untextured white fallback.  The draw
+   path then ignores the mesh's vertex colours, because those are what the
+   surface would otherwise be painted with -- see CVitaRenderer::SetWhiteTexture. */
+static bool g_bUntexturedSurface = false;
+
+/* SetTexture runs once per material chunk -- thousands of times a frame -- and
+   re-binding the texture that is already bound still makes vitaGL re-validate
+   its fixed-function state.  Remember what unit 0 holds and skip the no-ops.
+
+   Only unit 0 is tracked: glBindTexture applies to whichever unit is active,
+   so the lightmap binds (which run under glActiveTexture(GL_TEXTURE1)) must
+   stay direct, and anything that binds unit 0 behind this function's back has
+   to call VitaInvalidateTextureCache(). */
+static GLuint g_nBoundTexture0 = 0xFFFFFFFFu;
+/* Tri-state on purpose: -1 unknown, 0 disabled, 1 enabled.  A plain bool
+   cleared to false would claim texturing is off when it is really unknown, so
+   a following SetWhiteTexture would skip its glDisable and leave the previous
+   texture bound on the surface. */
+static int    g_nTexture2DEnabled = -1;
+static inline void VitaInvalidateTextureCache()
+{
+	g_nBoundTexture0 = 0xFFFFFFFFu;
+	g_nTexture2DEnabled = -1;
+}
+
+static void SetupVertexArraysForFormat(const byte *pBase, int nVertexFormat)
+{
+	const SBufInfoTable &tbl = gBufInfoTable[nVertexFormat];
+	int nStride = m_VertexSize[nVertexFormat];
+
+	glEnableClientState(GL_VERTEX_ARRAY);
+	glVertexPointer(3, GL_FLOAT, nStride, pBase);
+
+	if (tbl.OffsColor && !g_bUntexturedSurface)
+	{
+		glEnableClientState(GL_COLOR_ARRAY);
+		glColorPointer(4, GL_UNSIGNED_BYTE, nStride, pBase + tbl.OffsColor);
+	}
+	else
+	{
+		glDisableClientState(GL_COLOR_ARRAY);
+		glColor4f(1, 1, 1, 1);
+	}
+
+	if (tbl.OffsTC)
+	{
+		glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+		glTexCoordPointer(2, GL_FLOAT, nStride, pBase + tbl.OffsTC);
+	}
+	else
+	{
+		glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+	}
+}
+
+static void TeardownVertexArrays()
+{
+	glDisableClientState(GL_VERTEX_ARRAY);
+	glDisableClientState(GL_COLOR_ARRAY);
+	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+}
+
+/* Drawing from client-side pointers makes vitaGL copy the vertices and indices
+   into GPU-visible memory on every single draw call.  With a terrain sector at
+   ~1100 vertices and the low-res terrain at 16641, redrawn every frame, that
+   copying dominates the frame far more than the triangles themselves do.
+   Static geometry never changes, so upload it once into real buffer objects
+   and let the GPU read it directly.
+
+   Two deliberate limits.  Only meshes worth the bookkeeping are promoted --
+   small ones are dominated by per-call overhead, and the level has thousands
+   of them.  And the total is capped: the vitaGL pool is shared with textures,
+   and quietly exhausting it would trade frame rate for a crash. */
+static const int kGLBufferMinVerts = 64;
+static const unsigned int kGLBufferBudgetBytes = 20u * 1024u * 1024u;
+static unsigned int g_nGLBufferBytesUsed = 0;
+
+static bool EnsureGLVertexBuffer(CVertexBuffer *src)
+{
+	if (!src || src->m_bDynamic || src->m_NumVerts < kGLBufferMinVerts)
+		return false;
+	const byte *pData = (const byte *)src->m_VS[VSF_GENERAL].m_VData;
+	if (!pData)
+		return false;
+	const unsigned int nBytes = (unsigned int)(m_VertexSize[src->m_vertexformat] * src->m_NumVerts);
+	if (src->m_nGLVBO && !src->m_bGLDirty && src->m_nGLVBOVerts == src->m_NumVerts)
+		return true;
+	if (!src->m_nGLVBO)
+	{
+		if (g_nGLBufferBytesUsed + nBytes > kGLBufferBudgetBytes)
+			return false;
+		GLuint nName = 0;
+		glGenBuffers(1, &nName);
+		if (!nName)
+			return false;
+		src->m_nGLVBO = nName;
+		g_nGLBufferBytesUsed += nBytes;
+	}
+	glBindBuffer(GL_ARRAY_BUFFER, src->m_nGLVBO);
+	glBufferData(GL_ARRAY_BUFFER, nBytes, pData, GL_STATIC_DRAW);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	src->m_nGLVBOVerts = src->m_NumVerts;
+	src->m_bGLDirty = false;
+	return true;
+}
+
+static bool EnsureGLIndexBuffer(SVertexStream *inds)
+{
+	if (!inds || !inds->m_VData || inds->m_nItems <= 0)
+		return false;
+	const unsigned int nBytes = (unsigned int)(inds->m_nItems * sizeof(ushort));
+	if (inds->m_nGLIBO && !inds->m_bGLDirty && inds->m_nGLIBOItems == inds->m_nItems)
+		return true;
+	if (!inds->m_nGLIBO)
+	{
+		if (g_nGLBufferBytesUsed + nBytes > kGLBufferBudgetBytes)
+			return false;
+		GLuint nName = 0;
+		glGenBuffers(1, &nName);
+		if (!nName)
+			return false;
+		inds->m_nGLIBO = nName;
+		g_nGLBufferBytesUsed += nBytes;
+	}
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, inds->m_nGLIBO);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, nBytes, inds->m_VData, GL_STATIC_DRAW);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	inds->m_nGLIBOItems = inds->m_nItems;
+	inds->m_bGLDirty = false;
+	return true;
+}
+
+static GLenum PrimTypeToGL(int prmode)
+{
+	switch (prmode)
+	{
+		case R_PRIMV_TRIANGLE_STRIP: return GL_TRIANGLE_STRIP;
+		case R_PRIMV_MULTI_STRIPS:    return GL_TRIANGLE_STRIP;
+		case R_PRIMV_TRIANGLE_FAN:   return GL_TRIANGLE_FAN;
+		case R_PRIMV_QUADS:          return GL_TRIANGLE_FAN; // quads are always 4 verts; a fan draws the same single quad
+		default:                     return GL_TRIANGLES;
+	}
+}
+#endif
+
+void CVitaRenderer::DrawTriStrip(CVertexBuffer * src, int vert_num)
+{
+#if defined(LINUX)
+	if (!src || vert_num <= 0)
+		return;
+	const byte *pData = (const byte *)src->m_VS[VSF_GENERAL].m_VData;
+	if (!pData)
+		return;
+	SetupVertexArraysForFormat(pData, src->m_vertexformat);
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, vert_num);
+	TeardownVertexArrays();
+#endif
+}
 void * CVitaRenderer::GetDynVBPtr(int nVerts, int & nOffs, int Pool)
 {
 	/* Vita: real backing store, see VitaRenderer.h. Wrap to the start
@@ -156,8 +1043,6 @@ void CVitaRenderer::DrawDynVB(int nOffs, int Pool, int nVerts)
 	if (nOffs < 0 || nVerts <= 0 || nOffs + nVerts > DYNVB_CAPACITY)
 		return;
 	struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F *pV = &m_DynVB[nOffs];
-	sceClibPrintf("[BOOTTRACE] DrawDynVB: nOffs=%d nVerts=%d v0.xyz=(%f,%f,%f) v0.color=%08x v0.st=(%f,%f)\n",
-		nOffs, nVerts, pV->xyz.x, pV->xyz.y, pV->xyz.z, pV->color.dcolor, pV->st[0], pV->st[1]);
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glEnableClientState(GL_COLOR_ARRAY);
 	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
@@ -165,42 +1050,395 @@ void CVitaRenderer::DrawDynVB(int nOffs, int Pool, int nVerts)
 	glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F), &pV->color);
 	glTexCoordPointer(2, GL_FLOAT, sizeof(struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F), &pV->st);
 	glDrawArrays(GL_TRIANGLES, 0, nVerts);
-	sceClibPrintf("[BOOTTRACE] DrawDynVB: after glDrawArrays err=%d\n", glGetError());
 	glDisableClientState(GL_VERTEX_ARRAY);
 	glDisableClientState(GL_COLOR_ARRAY);
 	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
 #endif
 }
 
-void CVitaRenderer::DrawDynVB(struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F * pBuf, ushort * pInds, int nVerts, int nInds, int nPrimType) { }
+void CVitaRenderer::DrawDynVB(struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F * pBuf, ushort * pInds, int nVerts, int nInds, int nPrimType)
+{
+#if defined(LINUX)
+	if (!pBuf || nVerts <= 0)
+		return;
+	SetupVertexArraysForFormat((const byte *)pBuf, VERTEX_FORMAT_P3F_COL4UB_TEX2F);
+	if (pInds && nInds > 0)
+		glDrawElements(PrimTypeToGL(nPrimType), nInds, GL_UNSIGNED_SHORT, pInds);
+	else
+		glDrawArrays(PrimTypeToGL(nPrimType), 0, nVerts);
+	TeardownVertexArrays();
+#endif
+}
 void CVitaRenderer::SetFenceCompleted(CVertexBuffer * buffer) { }
-CVertexBuffer	* CVitaRenderer::CreateBuffer(int vertexcount, int vertexformat, const char * szSource, bool bDynamic) { return 0; }
-void CVitaRenderer::ReleaseBuffer(CVertexBuffer * bufptr) { }
-void CVitaRenderer::DrawBuffer(CVertexBuffer * src, SVertexStream * indicies, int numindices, int offsindex, int prmode, int vert_start, int vert_stop, CMatInfo * mi) { }
-void CVitaRenderer::UpdateBuffer(CVertexBuffer * dest, const void * src, int vertexcount, bool bUnLock, int nOffs, int Type) { }
-void CVitaRenderer::CreateIndexBuffer(SVertexStream * dest, const void * src, int indexcount) { }
-void CVitaRenderer::UpdateIndexBuffer(SVertexStream * dest, const void * src, int indexcount, bool bUnLock) { }
-void CVitaRenderer::ReleaseIndexBuffer(SVertexStream * dest) { }
+/* Vita: real system-memory vertex buffers -- same shape as the reference
+   (uncompiled-in) RenderDll/XRenderNULL/NULL_VertBuffer.cpp, which this
+   whole file otherwise follows: plain new[]/memcpy, no HW/video-memory
+   buffer, consumed directly by DrawBuffer/DrawTriStrip below via
+   glVertexPointer et al against the raw client-side bytes. */
+CVertexBuffer * CVitaRenderer::CreateBuffer(int vertexcount, int vertexformat, const char * szSource, bool bDynamic)
+{
+	CVertexBuffer *vb = new CVertexBuffer;
+	vb->m_bDynamic = bDynamic;
+	vb->m_vertexformat = vertexformat;
+	vb->m_NumVerts = vertexcount;
+	int nSize = m_VertexSize[vertexformat] * vertexcount;
+	vb->m_VS[VSF_GENERAL].m_VData = nSize > 0 ? new byte[nSize] : NULL;
+	return vb;
+}
+void CVitaRenderer::ReleaseBuffer(CVertexBuffer * bufptr)
+{
+	if (!bufptr)
+		return;
+#if defined(LINUX)
+	if (bufptr->m_nGLVBO)
+	{
+		GLuint nName = bufptr->m_nGLVBO;
+		glDeleteBuffers(1, &nName);
+		const unsigned int nBytes = (unsigned int)(m_VertexSize[bufptr->m_vertexformat] * bufptr->m_nGLVBOVerts);
+		g_nGLBufferBytesUsed = (g_nGLBufferBytesUsed > nBytes) ? g_nGLBufferBytesUsed - nBytes : 0;
+		bufptr->m_nGLVBO = 0;
+		bufptr->m_nGLVBOVerts = 0;
+	}
+#endif
+	delete [] (byte*)bufptr->m_VS[VSF_GENERAL].m_VData;
+	delete [] (byte*)bufptr->m_VS[VSF_TANGENTS].m_VData;
+	delete bufptr;
+}
+void CVitaRenderer::UpdateBuffer(CVertexBuffer * dest, const void * src, int vertexcount, bool bUnLock, int nOffs, int Type)
+{
+	if (!dest || !src || vertexcount <= 0)
+		return;
+	byte *pDst = (byte*)dest->m_VS[Type].m_VData;
+	if (!pDst)
+		return;
+#if defined(LINUX)
+	// CPU-side contents changed: any GPU copy is now stale.
+	dest->m_bGLDirty = true;
+#endif
+	if (Type == VSF_GENERAL)
+	{
+		int nStride = m_VertexSize[dest->m_vertexformat];
+		memcpy(pDst + nStride * nOffs, src, nStride * vertexcount);
+	}
+	else if (Type == VSF_TANGENTS)
+	{
+		memcpy(pDst + sizeof(SPipTangents) * nOffs, src, sizeof(SPipTangents) * vertexcount);
+	}
+}
+
+void CVitaRenderer::CreateIndexBuffer(SVertexStream * dest, const void * src, int indexcount)
+{
+	if (!dest)
+		return;
+#if defined(LINUX)
+	dest->m_bGLDirty = true;
+#endif
+	delete [] (ushort*)dest->m_VData;
+	dest->m_VData = NULL;
+	dest->m_nItems = 0;
+	if (indexcount > 0)
+	{
+		dest->m_VData = new ushort[indexcount];
+		dest->m_nItems = indexcount;
+		if (src)
+			memcpy(dest->m_VData, src, indexcount * sizeof(ushort));
+	}
+}
+void CVitaRenderer::UpdateIndexBuffer(SVertexStream * dest, const void * src, int indexcount, bool bUnLock)
+{
+	if (!dest || !src || indexcount <= 0)
+		return;
+#if defined(LINUX)
+	dest->m_bGLDirty = true;
+#endif
+	if (dest->m_nItems < indexcount)
+	{
+		delete [] (ushort*)dest->m_VData;
+		dest->m_VData = new ushort[indexcount];
+		dest->m_nItems = indexcount;
+	}
+	memcpy(dest->m_VData, src, indexcount * sizeof(ushort));
+}
+void CVitaRenderer::ReleaseIndexBuffer(SVertexStream * dest)
+{
+	if (!dest)
+		return;
+#if defined(LINUX)
+	if (dest->m_nGLIBO)
+	{
+		GLuint nName = dest->m_nGLIBO;
+		glDeleteBuffers(1, &nName);
+		const unsigned int nBytes = (unsigned int)(dest->m_nGLIBOItems * sizeof(ushort));
+		g_nGLBufferBytesUsed = (g_nGLBufferBytesUsed > nBytes) ? g_nGLBufferBytesUsed - nBytes : 0;
+		dest->m_nGLIBO = 0;
+		dest->m_nGLIBOItems = 0;
+	}
+	dest->m_bGLDirty = true;
+#endif
+	delete [] (ushort*)dest->m_VData;
+	dest->Reset();
+}
+
+/* Vita: real indexed-geometry draw, the payoff of everything else in this
+   block -- same glVertexPointer/glColorPointer/glTexCoordPointer +
+   glDrawElements shape as Draw2dImage (see its own comment) applied to the
+   already-set-up GL_MODELVIEW/GL_PROJECTION from SetCamera/PushMatrix/etc,
+   instead of Draw2dImage's own glOrtho. `mi` (shader/material) is ignored
+   for this pass -- see this file's header comment: no shader pipeline yet,
+   flat vertex-color/texture-modulate only. */
+void CVitaRenderer::DrawBuffer(CVertexBuffer * src, SVertexStream * indicies, int numindices, int offsindex, int prmode, int vert_start, int vert_stop, CMatInfo * mi)
+{
+#if defined(LINUX)
+	if (!src || !indicies)
+	{
+		sceClibPrintf("[BOOTTRACE] DrawBuffer: null src/indicies, src=%p indicies=%p\n", (void*)src, (void*)indicies);
+		return;
+	}
+	const byte *pData = (const byte *)src->m_VS[VSF_GENERAL].m_VData;
+	const ushort *pInds = (const ushort *)indicies->m_VData;
+	if (!pData || !pInds || numindices <= 0)
+	{
+		sceClibPrintf("[BOOTTRACE] DrawBuffer: bail pData=%p pInds=%p numindices=%d\n", (void*)pData, (void*)pInds, numindices);
+		return;
+	}
+
+	// Vita: this fired unconditionally on every single draw call -- once
+	// real gameplay started issuing hundreds of small unbatched draws per
+	// frame (grass/detail objects, HUD text), that meant thousands of
+	// synchronous sceClibPrintf log lines per second, which is real,
+	// self-inflicted I/O overhead heavy enough to destabilize a debug run
+	// (a 2.5s run produced 94K log lines here). The draw path itself is
+	// long since confirmed correct (glGetError()==0 verified extensively
+	// already); throttle this to an occasional sample instead of every call.
+	static int s_nDrawCalls = 0;
+	const bool bTrace = ((++s_nDrawCalls % 512) == 0);
+	if (bTrace)
+		sceClibPrintf("[BOOTTRACE] DrawBuffer: call#%d fmt=%d numindices=%d offsindex=%d prmode=%d vert_start=%d vert_stop=%d\n",
+			s_nDrawCalls, src->m_vertexformat, numindices, offsindex, prmode, vert_start, vert_stop);
+	/* Prefer real buffer objects; fall back to the client pointers for dynamic
+	   or small meshes, and for anything past the upload budget. */
+	const bool bGPUResident = EnsureGLVertexBuffer(src) && EnsureGLIndexBuffer(indicies);
+	if (bGPUResident)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, src->m_nGLVBO);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indicies->m_nGLIBO);
+		SetupVertexArraysForFormat(NULL, src->m_vertexformat);
+		glDrawElements(PrimTypeToGL(prmode), numindices, GL_UNSIGNED_SHORT,
+			(const void *)(size_t)(offsindex * sizeof(ushort)));
+		TeardownVertexArrays();
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+		return;
+	}
+
+	SetupVertexArraysForFormat(pData, src->m_vertexformat);
+	if (src->m_vertexformat == VERTEX_FORMAT_P3F_COL4UB)
+	{
+		static bool s_reportedColorOnlyDraw = false;
+		if (!s_reportedColorOnlyDraw)
+		{
+			s_reportedColorOnlyDraw = true;
+			const struct_VERTEX_FORMAT_P3F_COL4UB *v =
+				(const struct_VERTEX_FORMAT_P3F_COL4UB *)pData;
+			GLint blendSrc = 0, blendDst = 0;
+			glGetIntegerv(GL_BLEND_SRC, &blendSrc);
+			glGetIntegerv(GL_BLEND_DST, &blendDst);
+			sceClibPrintf("[VITAGL] fmt2 rgba=%u,%u,%u,%u blend=%d src=0x%x dst=0x%x err=0x%x\n",
+				(unsigned)v[0].color.bcolor[0], (unsigned)v[0].color.bcolor[1],
+				(unsigned)v[0].color.bcolor[2], (unsigned)v[0].color.bcolor[3],
+				(int)glIsEnabled(GL_BLEND), (unsigned)blendSrc, (unsigned)blendDst,
+				(unsigned)glGetError());
+			fflush(stdout);
+		}
+	}
+	glDrawElements(PrimTypeToGL(prmode), numindices, GL_UNSIGNED_SHORT, pInds + offsindex);
+	if (bTrace)
+		sceClibPrintf("[BOOTTRACE] DrawBuffer: after glDrawElements err=%d viewport w=%d h=%d\n", glGetError(), m_nWidth, m_nHeight);
+	TeardownVertexArrays();
+#endif
+}
 void CVitaRenderer::CheckError(const char * comment) { }
 void CVitaRenderer::Draw3dBBox(const Vec3 & mins, const Vec3 & maxs, int nPrimType) { }
-void CVitaRenderer::SetCamera(const CCamera & cam) { }
-static CCamera s_defaultCamera; const CCamera& CVitaRenderer::GetCamera() { return s_defaultCamera; }
 bool CVitaRenderer::SetGammaDelta(const float fGamma) { return false; }
 bool CVitaRenderer::ChangeDisplay(unsigned int width, unsigned int height, unsigned int cbpp) { return false; }
-void CVitaRenderer::ChangeViewport(unsigned int x, unsigned int y, unsigned int width, unsigned int height) { }
+void CVitaRenderer::ChangeViewport(unsigned int x, unsigned int y, unsigned int width, unsigned int height)
+{
+	SetViewport((int)x, (int)y, (int)width, (int)height);
+	m_nWidth = (int)width;
+	m_nHeight = (int)height;
+}
 bool CVitaRenderer::SaveTga(unsigned char * sourcedata, int sourceformat, int w, int h, const char * filename, bool flip) { return false; }
-void CVitaRenderer::SetTexture(int tnum, ETexType Type) { }
-void CVitaRenderer::SetWhiteTexture() { }
+/* Vita: real texture bind -- tnum is a GL texture id directly, same
+   convention FontSetTexture(int,int) above already uses (both are fed IDs
+   handed out by FontCreateTexture/EF_LoadTexture, both real glGenTextures
+   results). */
+void CVitaRenderer::SetTexture(int tnum, ETexType Type)
+{
+#if defined(LINUX)
+	if (tnum > 0)
+	{
+		g_bUntexturedSurface = false;
+		if (g_nTexture2DEnabled != 1)
+		{
+			glEnable(GL_TEXTURE_2D);
+			g_nTexture2DEnabled = 1;
+		}
+		if ((GLuint)tnum != g_nBoundTexture0)
+		{
+			glBindTexture(GL_TEXTURE_2D, (GLuint)tnum);
+			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+			g_nBoundTexture0 = (GLuint)tnum;
+		}
+	}
+	else
+	{
+		g_bUntexturedSurface = true;
+		if (g_nTexture2DEnabled != 0)
+		{
+			glDisable(GL_TEXTURE_2D);
+			g_nTexture2DEnabled = 0;
+		}
+	}
+#endif
+}
+void CVitaRenderer::SetWhiteTexture()
+{
+#if defined(LINUX)
+	/* The glColor4f here never actually took effect: DrawBuffer re-enables
+	   GL_COLOR_ARRAY for every vertex format that carries colours, and the
+	   array wins over the current colour.  So a surface that fell back to
+	   "white" was really drawn in its raw vertex colour -- white where those
+	   happened to be white, and solid black where they were dark, which is
+	   where the black slabs in the world came from.  Flag it so the draw path
+	   drops the colour array and this white is the colour that is actually
+	   used. */
+	g_bUntexturedSurface = true;
+	if (g_nTexture2DEnabled != 0)
+	{
+		glDisable(GL_TEXTURE_2D);
+		g_nTexture2DEnabled = 0;
+	}
+	glColor4f(1, 1, 1, 1);
+#endif
+}
+
+#if defined(LINUX)
+static GLenum GSBlendSrcToGL(int nState)
+{
+	switch (nState & GS_BLSRC_MASK)
+	{
+		case GS_BLSRC_ZERO:              return GL_ZERO;
+		case GS_BLSRC_ONE:                return GL_ONE;
+		case GS_BLSRC_DSTCOL:             return GL_DST_COLOR;
+		case GS_BLSRC_ONEMINUSDSTCOL:     return GL_ONE_MINUS_DST_COLOR;
+		case GS_BLSRC_SRCALPHA:           return GL_SRC_ALPHA;
+		case GS_BLSRC_ONEMINUSSRCALPHA:   return GL_ONE_MINUS_SRC_ALPHA;
+		case GS_BLSRC_DSTALPHA:           return GL_DST_ALPHA;
+		case GS_BLSRC_ONEMINUSDSTALPHA:   return GL_ONE_MINUS_DST_ALPHA;
+		case GS_BLSRC_ALPHASATURATE:      return GL_SRC_ALPHA_SATURATE;
+		case GS_BLSRC_SRCCOL:             return GL_SRC_COLOR;
+		default:                          return GL_ONE;
+	}
+}
+static GLenum GSBlendDstToGL(int nState)
+{
+	switch (nState & GS_BLDST_MASK)
+	{
+		case GS_BLDST_ZERO:              return GL_ZERO;
+		case GS_BLDST_ONE:                return GL_ONE;
+		case GS_BLDST_SRCCOL:             return GL_SRC_COLOR;
+		case GS_BLDST_ONEMINUSSRCCOL:     return GL_ONE_MINUS_SRC_COLOR;
+		case GS_BLDST_SRCALPHA:           return GL_SRC_ALPHA;
+		case GS_BLDST_ONEMINUSSRCALPHA:   return GL_ONE_MINUS_SRC_ALPHA;
+		case GS_BLDST_DSTALPHA:           return GL_DST_ALPHA;
+		case GS_BLDST_ONEMINUSDSTALPHA:   return GL_ONE_MINUS_DST_ALPHA;
+		default:                          return GL_ZERO;
+	}
+}
+#endif
+
+/* Vita: real (partial) render-state mapping -- covers blend, depth
+   test/write and alpha test, the flags terrain/basic opaque geometry
+   actually sets (see CryCommon/IRenderer.h's GS_* for the full set this
+   doesn't cover yet, e.g. stencil/texgen -- honest scope cut, not silently
+   ignored: SetColorOp/SetTexgen/EnableFog etc remain their own separate,
+   still-stubbed entry points). */
+void CVitaRenderer::SetState(int State)
+{
+#if defined(LINUX)
+	int nBlend = State & GS_BLEND_MASK;
+	if (nBlend)
+	{
+		glEnable(GL_BLEND);
+		glBlendFunc(GSBlendSrcToGL(State), GSBlendDstToGL(State));
+	}
+	else
+	{
+		glDisable(GL_BLEND);
+	}
+
+	glDepthMask((State & GS_DEPTHWRITE) ? GL_TRUE : GL_FALSE);
+
+	if (State & GS_NODEPTHTEST)
+	{
+		glDisable(GL_DEPTH_TEST);
+	}
+	else
+	{
+		glEnable(GL_DEPTH_TEST);
+		glDepthFunc((State & GS_DEPTHFUNC_EQUAL) ? GL_EQUAL : (State & GS_DEPTHFUNC_GREAT) ? GL_GREATER : GL_LEQUAL);
+	}
+
+	if (State & GS_ALPHATEST_MASK)
+	{
+		glEnable(GL_ALPHA_TEST);
+		if (State & GS_ALPHATEST_GREATER0)      glAlphaFunc(GL_GREATER, 0.0f);
+		else if (State & GS_ALPHATEST_LESS128)  glAlphaFunc(GL_LESS, 0.5f);
+		else if (State & GS_ALPHATEST_GEQUAL128) glAlphaFunc(GL_GEQUAL, 0.5f);
+		else if (State & GS_ALPHATEST_GEQUAL64)  glAlphaFunc(GL_GEQUAL, 0.25f);
+	}
+	else
+	{
+		glDisable(GL_ALPHA_TEST);
+	}
+
+	if (nBlend)
+	{
+		static bool s_reportedBlendState = false;
+		if (!s_reportedBlendState)
+		{
+			s_reportedBlendState = true;
+			GLint blendSrc = 0, blendDst = 0;
+			glGetIntegerv(GL_BLEND_SRC, &blendSrc);
+			glGetIntegerv(GL_BLEND_DST, &blendDst);
+			sceClibPrintf("[VITAGL] SetState state=0x%x blend=%d src=0x%x dst=0x%x depthWrite=%d err=0x%x\n",
+				State, (int)glIsEnabled(GL_BLEND), (unsigned)blendSrc, (unsigned)blendDst,
+				(State & GS_DEPTHWRITE) != 0, (unsigned)glGetError());
+			fflush(stdout);
+		}
+	}
+#endif
+}
 void CVitaRenderer::WriteXY(CXFont * currfont, int x, int y, float xscale, float yscale, float r, float g, float b, float a, const char * message, ...) { }
 void CVitaRenderer::Draw2dText(float posX, float posY, const char * szText, SDrawTextInfo & info) { }
 void CVitaRenderer::Draw2dImage(float xpos, float ypos, float w, float h, int texture_id, float s0, float t0, float s1, float t1, float angle, float r, float g, float b, float a, float z)
 {
 #if defined(LINUX)
-	/* Vita: real basic-shape/2D-image primitive -- solid-colored filled
-	   rectangle when texture_id<=0 (no real ITexPic pipeline exists yet,
-	   see EF_LoadTexture's stub), or a textured quad otherwise (e.g. the
-	   font atlas, or any texture id obtained via FontCreateTexture).
-	   angle is ignored (axis-aligned only) -- not needed for menu boxes. */
+	/* Vita: retain Crytek's OpenGL/D3D Draw2dImage texture-coordinate
+	   contract.  DDS and the rest of the retail UI use a top-left image
+	   origin, so both original backends submit (1-t), not t, even though the
+	   screen-space projection itself also has y increasing downwards. */
+	/* Far Cry's 2D API is authored in a virtual 800x600 canvas.  This is
+	   copied from the real Crytek OpenGL backend's Draw2dImage contract. */
+	xpos = ScaleCoordX(xpos);
+	ypos = ScaleCoordY(ypos) - 1.0f;
+	w = ScaleCoordX(w) + 1.0f;
+	h = ScaleCoordY(h) + 2.0f;
+
+	GLboolean wasDepth = glIsEnabled(GL_DEPTH_TEST);
+	GLboolean wasBlend = glIsEnabled(GL_BLEND);
+	GLboolean wasTexture = glIsEnabled(GL_TEXTURE_2D);
+
 	glMatrixMode(GL_PROJECTION);
 	glPushMatrix();
 	glLoadIdentity();
@@ -217,6 +1455,7 @@ void CVitaRenderer::Draw2dImage(float xpos, float ypos, float w, float h, int te
 	{
 		glEnable(GL_TEXTURE_2D);
 		glBindTexture(GL_TEXTURE_2D, (GLuint)texture_id);
+		VitaInvalidateTextureCache(); // bound outside SetTexture
 		glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 	}
 	else
@@ -224,9 +1463,30 @@ void CVitaRenderer::Draw2dImage(float xpos, float ypos, float w, float h, int te
 		glDisable(GL_TEXTURE_2D);
 	}
 
-	float x0 = xpos, y0 = ypos, x1 = xpos + w, y1 = ypos + h;
-	const float verts[8] = { x0,y0, x1,y0, x1,y1, x0,y1 };
-	const float uvs[8]   = { s0,t0, s1,t0, s1,t1, s0,t1 };
+	float verts[8] = {
+		xpos,     ypos,
+		xpos + w, ypos,
+		xpos + w, ypos + h,
+		xpos,     ypos + h
+	};
+	if (angle != 0.0f)
+	{
+		const float cx = xpos + w * 0.5f;
+		const float cy = ypos + h * 0.5f;
+		const float c = cry_cosf(DEG2RAD(angle));
+		const float s = cry_sinf(DEG2RAD(angle));
+		for (int i = 0; i < 4; ++i)
+		{
+			const float x = verts[i*2+0] - cx;
+			const float y = verts[i*2+1] - cy;
+			verts[i*2+0] = x*c - y*s + cx;
+			verts[i*2+1] = x*s + y*c + cy;
+		}
+	}
+	const float uvs[8] = {
+		s0, 1.0f-t0, s1, 1.0f-t0,
+		s1, 1.0f-t1, s0, 1.0f-t1
+	};
 	unsigned char ur = (unsigned char)(r*255.0f), ug = (unsigned char)(g*255.0f),
 		ub = (unsigned char)(b*255.0f), ua = (unsigned char)(a*255.0f);
 	const unsigned char cols[16] = {
@@ -251,6 +1511,9 @@ void CVitaRenderer::Draw2dImage(float xpos, float ypos, float w, float h, int te
 	glPopMatrix();
 	glMatrixMode(GL_MODELVIEW);
 	glPopMatrix();
+	if (wasDepth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+	if (wasBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+	if (wasTexture) glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D);
 #endif
 }
 void CVitaRenderer::DrawImage(float xpos, float ypos, float w, float h, int texture_id, float s0, float t0, float s1, float t1, float r, float g, float b, float a)
@@ -259,15 +1522,179 @@ void CVitaRenderer::DrawImage(float xpos, float ypos, float w, float h, int text
 }
 int CVitaRenderer::SetPolygonMode(int mode) { return 0; }
 void CVitaRenderer::GetMemoryUsage(ICrySizer* Sizer) { }
-void CVitaRenderer::ScreenShot(const char * filename) { }
-void CVitaRenderer::ProjectToScreen(float ptx, float pty, float ptz, float * sx, float * sy, float * sz) { }
-int CVitaRenderer::UnProject(float sx, float sy, float sz, float * px, float * py, float * pz, const float modelMatrix[16], const float projMatrix[16], const int viewport[4]) { return 0; }
-int CVitaRenderer::UnProjectFromScreen(float sx, float sy, float sz, float * px, float * py, float * pz) { return 0; }
-void CVitaRenderer::GetModelViewMatrix(float * mat) { }
-void CVitaRenderer::GetModelViewMatrix(double * mat) { }
-void CVitaRenderer::GetProjectionMatrix(double * mat) { }
-void CVitaRenderer::GetProjectionMatrix(float * mat) { }
-Vec3 CVitaRenderer::GetUnProject(const Vec3 & WindowCoords, const CCamera & cam) { return Vec3(0,0,0); }
+void CVitaRenderer::ScreenShot(const char * filename)
+{
+#if defined(LINUX)
+	/* Vita: real framebuffer capture -- glReadPixels + a real, minimal
+	   24bpp uncompressed BMP writer (same format LoadBMP_RGBA32 above
+	   already decodes, just the encode direction). Written straight to
+	   ux0:data (real, writable, host-visible under Vita3K's VitaFS path)
+	   via plain fopen, not ICryPak -- this is a debug capture, not game
+	   content. */
+	int w = m_nWidth, h = m_nHeight;
+	if (w <= 0 || h <= 0)
+		return;
+	// Vita: plain glReadPixels into ordinary heap memory consistently reads
+	// back all-zero despite real, error-free (glGetError()==0) draw calls
+	// beforehand. Two isolated fix attempts have now failed:
+	//  - vglAlloc (GPU-mapped memory) + glFinish() together: real host-side
+	//    crash.
+	//  - glFinish() alone, plain heap buffer: also fatal -- this exact run
+	//    died far earlier (~54K log lines) and far more abruptly (no crash
+	//    trace at all, just a clean stop) than the many multi-million-line
+	//    successful gameplay runs without it, and never even reached this
+	//    function's own trace print after the call. Reverted.
+	// Root cause still open, tracked separately from the renderer's actual
+	// (confirmed-working) draw calls.
+	byte *pPixels = new byte[w * h * 3];
+	glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pPixels);
+	sceClibPrintf("[BOOTTRACE] ScreenShot: glReadPixels err=%d first3=[%d,%d,%d]\n", glGetError(), pPixels[0], pPixels[1], pPixels[2]);
+
+	FILE *fp = fopen(filename, "wb");
+	if (!fp)
+	{
+		sceClibPrintf("[BOOTTRACE] ScreenShot: fopen failed for %s\n", filename);
+		delete [] pPixels;
+		return;
+	}
+
+	int rowSize = ((w * 3 + 3) / 4) * 4;
+	int dataSize = rowSize * h;
+	byte fileHeader[14] = {0};
+	fileHeader[0] = 'B'; fileHeader[1] = 'M';
+	*(unsigned int*)&fileHeader[2] = 14 + 40 + dataSize;
+	*(unsigned int*)&fileHeader[10] = 14 + 40;
+	byte infoHeader[40] = {0};
+	*(unsigned int*)&infoHeader[0] = 40;
+	*(int*)&infoHeader[4] = w;
+	*(int*)&infoHeader[8] = h; // positive height = bottom-up, matches glReadPixels row order directly
+	*(unsigned short*)&infoHeader[12] = 1;
+	*(unsigned short*)&infoHeader[14] = 24;
+	*(unsigned int*)&infoHeader[20] = dataSize;
+
+	fwrite(fileHeader, 1, 14, fp);
+	fwrite(infoHeader, 1, 40, fp);
+	byte *pad = (byte*)"\0\0\0";
+	for (int y = 0; y < h; y++)
+	{
+		const byte *pRow = pPixels + (long)y * w * 3;
+		for (int x = 0; x < w; x++)
+		{
+			byte bgr[3] = { pRow[x*3+2], pRow[x*3+1], pRow[x*3+0] };
+			fwrite(bgr, 1, 3, fp);
+		}
+		if (rowSize > w * 3)
+			fwrite(pad, 1, rowSize - w * 3, fp);
+	}
+	fclose(fp);
+	delete [] pPixels;
+	sceClibPrintf("[BOOTTRACE] ScreenShot: wrote %s (%dx%d)\n", filename, w, h);
+#endif
+}
+void CVitaRenderer::ProjectToScreen(float ptx, float pty, float ptz, float * sx, float * sy, float * sz)
+{
+#if defined(LINUX)
+	float model[16], projection[16];
+	int viewport[4];
+	glGetFloatv(GL_MODELVIEW_MATRIX, model);
+	glGetFloatv(GL_PROJECTION_MATRIX, projection);
+	glGetIntegerv(GL_VIEWPORT, viewport);
+	const float in[4] = { ptx, pty, ptz, 1.0f };
+	float eye[4], clip[4];
+	for (int row = 0; row < 4; ++row)
+	{
+		eye[row] = model[row] * in[0] + model[4 + row] * in[1] + model[8 + row] * in[2] + model[12 + row];
+		clip[row] = projection[row] * eye[0] + projection[4 + row] * eye[1] + projection[8 + row] * eye[2] + projection[12 + row] * eye[3];
+	}
+	if (fabsf(clip[3]) < 1.0e-8f)
+	{
+		if (sx) *sx = 0.0f; if (sy) *sy = 0.0f; if (sz) *sz = 0.0f;
+		return;
+	}
+	const float invW = 1.0f / clip[3];
+	const float winX = viewport[0] + (clip[0] * invW + 1.0f) * viewport[2] * 0.5f;
+	const float winY = viewport[1] + (clip[1] * invW + 1.0f) * viewport[3] * 0.5f;
+	if (sx) *sx = winX * 100.0f / (float)m_nWidth;
+	if (sy) *sy = 100.0f - winY * 100.0f / (float)m_nHeight;
+	if (sz) *sz = (clip[2] * invW + 1.0f) * 0.5f;
+#endif
+}
+int CVitaRenderer::UnProject(float sx, float sy, float sz, float * px, float * py, float * pz, const float modelMatrix[16], const float projMatrix[16], const int viewport[4])
+{
+	float combined[16];
+	for (int col = 0; col < 4; ++col)
+		for (int row = 0; row < 4; ++row)
+			combined[col * 4 + row] =
+				projMatrix[row] * modelMatrix[col * 4] +
+				projMatrix[4 + row] * modelMatrix[col * 4 + 1] +
+				projMatrix[8 + row] * modelMatrix[col * 4 + 2] +
+				projMatrix[12 + row] * modelMatrix[col * 4 + 3];
+	float inverse[16];
+	if (!QQinvertMatrixf(inverse, combined))
+		return 0;
+	const float in[4] = {
+		(sx - viewport[0]) * 2.0f / viewport[2] - 1.0f,
+		(sy - viewport[1]) * 2.0f / viewport[3] - 1.0f,
+		2.0f * sz - 1.0f, 1.0f
+	};
+	float out[4];
+	for (int row = 0; row < 4; ++row)
+		out[row] = inverse[row] * in[0] + inverse[4 + row] * in[1] + inverse[8 + row] * in[2] + inverse[12 + row];
+	if (fabsf(out[3]) < 1.0e-8f)
+		return 0;
+	const float invW = 1.0f / out[3];
+	if (px) *px = out[0] * invW;
+	if (py) *py = out[1] * invW;
+	if (pz) *pz = out[2] * invW;
+	return 1;
+}
+int CVitaRenderer::UnProjectFromScreen(float sx, float sy, float sz, float * px, float * py, float * pz)
+{
+#if defined(LINUX)
+	float model[16], projection[16];
+	int viewport[4];
+	glGetFloatv(GL_MODELVIEW_MATRIX, model);
+	glGetFloatv(GL_PROJECTION_MATRIX, projection);
+	glGetIntegerv(GL_VIEWPORT, viewport);
+	return UnProject(sx, sy, sz, px, py, pz, model, projection, viewport);
+#else
+	return 0;
+#endif
+}
+void CVitaRenderer::GetModelViewMatrix(float * mat)
+{
+#if defined(LINUX)
+	if (mat) glGetFloatv(GL_MODELVIEW_MATRIX, mat);
+#endif
+}
+void CVitaRenderer::GetModelViewMatrix(double * mat)
+{
+#if defined(LINUX)
+	if (!mat) return;
+	float values[16]; glGetFloatv(GL_MODELVIEW_MATRIX, values);
+	for (int i = 0; i < 16; ++i) mat[i] = values[i];
+#endif
+}
+void CVitaRenderer::GetProjectionMatrix(double * mat)
+{
+#if defined(LINUX)
+	if (!mat) return;
+	float values[16]; glGetFloatv(GL_PROJECTION_MATRIX, values);
+	for (int i = 0; i < 16; ++i) mat[i] = values[i];
+#endif
+}
+void CVitaRenderer::GetProjectionMatrix(float * mat)
+{
+#if defined(LINUX)
+	if (mat) glGetFloatv(GL_PROJECTION_MATRIX, mat);
+#endif
+}
+Vec3 CVitaRenderer::GetUnProject(const Vec3 & WindowCoords, const CCamera & cam)
+{
+	Vec3 result(0, 0, 0);
+	UnProjectFromScreen(WindowCoords.x, WindowCoords.y, WindowCoords.z, &result.x, &result.y, &result.z);
+	return result;
+}
 void CVitaRenderer::RenderToViewport(const CCamera & cam, float x, float y, float width, float height) { }
 void CVitaRenderer::WriteDDS(byte * dat, int wdt, int hgt, int Size, const char * name, EImFormat eF, int NumMips) { }
 void CVitaRenderer::WriteTGA(byte * dat, int wdt, int hgt, const char * name, int bits) { }
@@ -288,6 +1715,7 @@ int CVitaRenderer::FontCreateTexture(int Width, int Height, byte * pData, ETEX_F
 	glGenTextures(1, &tex);
 	sceClibPrintf("[BOOTTRACE] FontCreateTexture: glGenTextures tex=%u err=%d\n", tex, glGetError());
 	glBindTexture(GL_TEXTURE_2D, tex);
+	VitaInvalidateTextureCache(); // bound outside SetTexture
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 	if (eTF == eTF_8000)
@@ -303,24 +1731,9 @@ int CVitaRenderer::FontCreateTexture(int Width, int Height, byte * pData, ETEX_F
 bool CVitaRenderer::FontUpdateTexture(int nTexId, int X, int Y, int USize, int VSize, byte * pData)
 {
 #if defined(LINUX)
-	sceClibPrintf("[BOOTTRACE] FontUpdateTexture entered, nTexId=%d USize=%d VSize=%d pData=%p bytes=[%02x %02x %02x %02x]\n",
-		nTexId, USize, VSize, (void*)pData, pData?pData[0]:0, pData?pData[1]:0, pData?pData[2]:0, pData?pData[3]:0);
-	if (pData) {
-		long total = (long)USize * VSize * 4;
-		long nonWhiteFF = 0, nonZeroAlpha = 0;
-		unsigned char minB = 255, maxB = 0;
-		for (long i = 0; i < total; i += 4) {
-			unsigned char a = pData[i+3];
-			if (a != 0) nonZeroAlpha++;
-			if (a < minB) minB = a;
-			if (a > maxB) maxB = a;
-		}
-		sceClibPrintf("[BOOTTRACE] FontUpdateTexture: buffer scan total=%ld nonZeroAlpha=%ld minAlpha=%d maxAlpha=%d\n",
-			total/4, nonZeroAlpha, (int)minB, (int)maxB);
-	}
 	glBindTexture(GL_TEXTURE_2D, (GLuint)nTexId);
+	VitaInvalidateTextureCache(); // bound outside SetTexture
 	glTexSubImage2D(GL_TEXTURE_2D, 0, X, Y, USize, VSize, GL_RGBA, GL_UNSIGNED_BYTE, pData);
-	sceClibPrintf("[BOOTTRACE] FontUpdateTexture: after glTexSubImage2D err=%d\n", glGetError());
 	return true;
 #else
 	return false;
@@ -331,11 +1744,10 @@ void CVitaRenderer::FontSetTexture(class CFBitmap* a0, int nFilterMode) { }
 void CVitaRenderer::FontSetTexture(int nTexId, int nFilterMode)
 {
 #if defined(LINUX)
-	sceClibPrintf("[BOOTTRACE] FontSetTexture: nTexId=%d\n", nTexId);
 	glEnable(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, (GLuint)nTexId);
+	VitaInvalidateTextureCache(); // bound outside SetTexture
 	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-	sceClibPrintf("[BOOTTRACE] FontSetTexture: err=%d\n", glGetError());
 #endif
 }
 void CVitaRenderer::FontSetRenderingState(unsigned long nVirtualScreenWidth, unsigned long nVirtualScreenHeight)
@@ -382,25 +1794,194 @@ bool CVitaRenderer::EF_PrecacheResource(CDLight * pLS, float fDist, float fTimeT
 void CVitaRenderer::EF_EnableHeatVision(bool bEnable) { }
 bool CVitaRenderer::EF_GetHeatVision() { return false; }
 void CVitaRenderer::EF_PolygonOffset(bool bEnable, float fFactor, float fUnits) { }
-void CVitaRenderer::EF_AddPolyToScene3D(int Ef, int numPts, SColorVert * verts, CCObject * obj, int nFogID) { }
-CCObject * CVitaRenderer::EF_AddSpriteToScene(int Ef, int numPts, SColorVert * verts, CCObject * obj, byte * inds, int ninds, int nFogID) { return 0; }
+void CVitaRenderer::EF_AddPolyToScene3D(int Ef, int numPts, SColorVert * verts, CCObject * obj, int nFogID)
+{
+	EF_AddSpriteToScene(Ef, numPts, verts, obj, NULL, 0, nFogID);
+}
+CCObject * CVitaRenderer::EF_AddSpriteToScene(int Ef, int numPts, SColorVert * verts, CCObject * obj, byte * inds, int ninds, int nFogID)
+{
+#if defined(LINUX)
+	if (!verts || numPts < 3)
+		return obj;
+	std::vector<struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F> vitaVerts((size_t)numPts);
+	for (int i = 0; i < numPts; ++i)
+	{
+		vitaVerts[i].xyz = verts[i].vert;
+		vitaVerts[i].color = verts[i].color;
+		vitaVerts[i].st[0] = verts[i].dTC[0];
+		vitaVerts[i].st[1] = verts[i].dTC[1];
+	}
+	std::vector<ushort> vitaIndices;
+	if (inds && ninds > 0)
+	{
+		vitaIndices.resize((size_t)ninds);
+		for (int i = 0; i < ninds; ++i)
+			vitaIndices[i] = inds[i];
+	}
+	else
+	{
+		vitaIndices.reserve((size_t)(numPts - 2) * 3);
+		for (int i = 0; i < numPts - 2; ++i)
+		{
+			vitaIndices.push_back(0);
+			vitaIndices.push_back((ushort)(i + 1));
+			vitaIndices.push_back((ushort)(i + 2));
+		}
+	}
+	SetCullMode(R_CULL_NONE);
+	SetState(obj ? obj->m_RenderState : (GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA));
+	if (obj && obj->m_NumCM > 0)
+		SetTexture(obj->m_NumCM, eTT_Base);
+	else
+		SetWhiteTexture();
+	const bool hasObjectTransform = obj && (obj->m_ObjFlags & FOB_TRANS_MASK);
+	if (hasObjectTransform)
+	{
+		PushMatrix();
+		MultMatrix(obj->m_Matrix.GetData());
+	}
+	DrawDynVB(&vitaVerts[0], &vitaIndices[0], numPts, (int)vitaIndices.size(), R_PRIMV_TRIANGLES);
+	if (hasObjectTransform)
+		PopMatrix();
+#endif
+	return obj;
+}
 void CVitaRenderer::EF_AddPolyToScene2D(int Ef, int numPts, SColorVert2D * verts) { }
 void CVitaRenderer::EF_AddPolyToScene2D(SShaderItem si, int nTempl, int numPts, SColorVert2D * verts) { }
-IShader * CVitaRenderer::EF_LoadShader(const char * name, EShClass Class, int flags, uint64 nMaskGen) { return 0; }
-SShaderItem CVitaRenderer::EF_LoadShaderItem(const char * name, EShClass Class, bool bShare, const char * templName, int flags, SInputShaderResources * Res, uint64 nMaskGen) { return SShaderItem(); }
+IShader * CVitaRenderer::EF_LoadShader(const char * name, EShClass Class, int flags, uint64 nMaskGen)
+{
+	std::string key = name ? name : "";
+	for (size_t i = 0; i < key.size(); ++i)
+		key[i] = (char)tolower((unsigned char)key[i]);
+	std::map<std::string, CVitaShader *>::iterator found = m_ShaderByName.find(key);
+	if (found != m_ShaderByName.end())
+	{
+		found->second->AddRef();
+		return found->second;
+	}
+	CVitaShader *shader = new CVitaShader(m_nNextShaderId++, name, nMaskGen);
+	m_ShaderByName[key] = shader;
+	shader->AddRef();
+	return shader;
+}
+
+SShaderItem CVitaRenderer::EF_LoadShaderItem(const char * name, EShClass Class, bool bShare, const char * templName, int flags, SInputShaderResources * Res, uint64 nMaskGen)
+{
+	SShaderItem item;
+	item.m_pShader = EF_LoadShader(templName && *templName ? templName : name, Class, flags, nMaskGen);
+
+	SRenderShaderResources *resources = new SRenderShaderResources;
+	resources->m_nRefCounter = 1;
+	resources->m_Id = -1;
+	if (Res)
+	{
+		resources->m_TexturePath = Res->m_TexturePath;
+		resources->m_ResFlags = Res->m_ResFlags;
+		resources->m_Opacity = Res->m_Opacity;
+		resources->m_AlphaRef = Res->m_AlphaRef;
+		resources->m_LMaterial = NULL;
+		resources->m_ShaderParams.Copy(Res->m_ShaderParams);
+		for (int i = 0; i < EFTT_MAX; ++i)
+		{
+			if (!Res->m_Textures[i].m_Name.empty() || Res->m_Textures[i].m_TU.m_TexPic)
+			{
+				resources->AddTextureMap(i);
+				*resources->m_Textures[i] = Res->m_Textures[i];
+			}
+		}
+		resources->PostLoad();
+	}
+	item.m_pShaderResources = resources;
+	return item;
+}
 bool CVitaRenderer::EF_ReloadFile(const char * szFileName) { return false; }
 void CVitaRenderer::EF_ReloadShaderFiles(int nCategory) { }
 void CVitaRenderer::EF_ReloadTextures() { }
 IShader			* CVitaRenderer::EF_CopyShader(IShader * ef) { return 0; }
-ITexPic * CVitaRenderer::EF_GetTextureByID(int Id) { return 0; }
+ITexPic * CVitaRenderer::EF_GetTextureByID(int Id)
+{
+	std::map<int, CVitaTexPic *>::iterator it = m_TextureById.find(Id);
+	return it != m_TextureById.end() ? it->second : NULL;
+}
+
+void CVitaRenderer::UnregisterTexture(CVitaTexPic *pTexture)
+{
+	if (!pTexture)
+		return;
+	std::map<int, CVitaTexPic *>::iterator it = m_TextureById.find(pTexture->GetTextureID());
+	if (it != m_TextureById.end() && it->second == pTexture)
+		m_TextureById.erase(it);
+	for (std::map<std::string, CVitaTexPic *>::iterator nameIt = m_TextureByName.begin();
+		nameIt != m_TextureByName.end(); )
+	{
+		if (nameIt->second == pTexture)
+			m_TextureByName.erase(nameIt++);
+		else
+			++nameIt;
+	}
+}
 
 CVitaTexPic::~CVitaTexPic()
 {
+	if (gcpVitaRenderer)
+		gcpVitaRenderer->UnregisterTexture(this);
+	if (m_nGLTexId > 0)
+	{
+		GLuint tex = (GLuint)m_nGLTexId;
+		glDeleteTextures(1, &tex);
+	}
 	if (m_pRGBA32)
 		delete [] m_pRGBA32;
 }
 
 #if defined(LINUX)
+/* Vita: chunked FRead -- a single FRead() call for a large loose file (a
+   few hundred KB, e.g. a lightmap DDS) has been observed to hang
+   indefinitely on Vita3K for specific files while the exact same bytes
+   read instantly via a normal Win32 file read on the host -- reproducible,
+   file-content-independent (the file itself is byte-correct), looks like a
+   real bug in Vita3K's own sceIoRead emulation for certain read sizes/
+   offsets, not something fixable from engine code. Reading in bounded
+   chunks sidesteps whatever specific (size, offset) combination triggers
+   it, and a hard retry cap means a genuinely bad read fails cleanly
+   (honest failure -- see EF_LoadTexture's own comment) instead of hanging
+   the whole engine. */
+static size_t FReadChunked(ICryPak *pPak, void *pDst, size_t nTotal, FILE *fp)
+{
+	/* 16 KiB was chosen to dodge a Vita3K sceIoRead emulation bug.  On real
+	   hardware that only buys syscalls: a 4 MiB texture became 256 reads
+	   through CryPak and its zlib layer instead of a handful, and textures are
+	   a large share of level load time.  256 KiB keeps the bounded-read
+	   property (and the stall retry below) while cutting the call count by
+	   16x. */
+	static const size_t CHUNK = 256 * 1024;
+	static const int MAX_STALLED_RETRIES = 8;
+	byte *p = (byte*)pDst;
+	size_t nGot = 0;
+	int nStalled = 0;
+	int nIter = 0;
+	while (nGot < nTotal)
+	{
+		size_t nWant = (nTotal - nGot) < CHUNK ? (nTotal - nGot) : CHUNK;
+		size_t nRead = pPak->FRead(p + nGot, 1, nWant, fp);
+		nIter++;
+		if (nRead == 0)
+		{
+			if (++nStalled > MAX_STALLED_RETRIES)
+				break;
+			continue;
+		}
+		nStalled = 0;
+		nGot += nRead;
+		if (nIter > 100000)
+		{
+			sceClibPrintf("[BOOTTRACE] FReadChunked: giving up after %d iterations, nGot=%u/%u\n", nIter, (unsigned)nGot, (unsigned)nTotal);
+			break;
+		}
+	}
+	return nGot;
+}
+
 /* Vita: real BMP decoder -- 24bpp uncompressed only, which is what the
    real, retail Far Cry install's fcsplash.bmp actually is (verified via
    `file`/hexdump before writing this). No fabricated pixels: every byte
@@ -466,7 +2047,7 @@ static byte *LoadBMP_RGBA32(ICryPak *pPak, const char *path, int *pOutW, int *pO
 
 	pPak->FSeek(fp, (long)dataOffset, 0 /*SEEK_SET*/);
 
-	if (pPak->FRead(pSrcBuf, 1, srcSize, fp) != (size_t)srcSize)
+	if (FReadChunked(pPak, pSrcBuf, srcSize, fp) != (size_t)srcSize)
 	{
 		sceClibPrintf("[BOOTTRACE] LoadBMP_RGBA32: bulk pixel read failed for %s\n", path);
 		delete [] pSrcBuf;
@@ -651,8 +2232,45 @@ static void DecompressBlockDXT5(int x, int y, int width, const byte *blockStorag
 
 enum EDdsFourCC { DDS_FOURCC_NONE=0, DDS_FOURCC_DXT1, DDS_FOURCC_DXT3, DDS_FOURCC_DXT5 };
 
-static byte *LoadDDS_RGBA32(ICryPak *pPak, const char *path, int *pOutW, int *pOutH)
+/* Baked lightmaps can be turned off at runtime with "r_lightmaps 0" -- useful
+   for telling a lighting problem apart from a texture one without a rebuild. */
+static bool LightMapsEnabled()
 {
+	static ICVar *s_pLightMaps = NULL;
+	static bool s_bLookedUp = false;
+	if (!s_bLookedUp && iConsole)
+	{
+		s_bLookedUp = true;
+		s_pLightMaps = iConsole->GetCVar("r_lightmaps");
+	}
+	// On unless explicitly disabled -- see CVitaRenderer::Init.
+	return !s_pLightMaps || s_pLightMaps->GetIVal() != 0;
+}
+
+//! Pulls one channel out of a packed DDS pixel using its header bit mask and
+//! rescales it to 0..255, so 16/24/32bpp layouts all decode the same way.
+static inline byte DDSExtractChannel(unsigned int pixel, unsigned int mask, byte fallback)
+{
+	if (!mask)
+		return fallback;
+	int shift = 0;
+	while (shift < 32 && !((mask >> shift) & 1u))
+		++shift;
+	const unsigned int maxValue = mask >> shift;
+	if (!maxValue)
+		return fallback;
+	const unsigned int value = (pixel & mask) >> shift;
+	return (byte)((value * 255u) / maxValue);
+}
+
+static byte *LoadDDSForVita(ICryPak *pPak, const char *path, int *pOutW, int *pOutH,
+	GLenum *pOutInternalFormat, int *pOutDataSize, bool *pOutCompressed, int *pOutMipCount)
+{
+	*pOutInternalFormat = GL_RGBA;
+	*pOutDataSize = 0;
+	*pOutCompressed = false;
+	if (pOutMipCount)
+		*pOutMipCount = 1;
 	FILE *fp = pPak->FOpen(path, "rb");
 	if (!fp)
 	{
@@ -679,24 +2297,117 @@ static byte *LoadDDS_RGBA32(ICryPak *pPak, const char *path, int *pOutW, int *pO
 	else if (memcmp(fourCCBytes, "DXT3", 4) == 0) { fourCC = DDS_FOURCC_DXT3; blockSize = 16; }
 	else if (memcmp(fourCCBytes, "DXT5", 4) == 0) { fourCC = DDS_FOURCC_DXT5; blockSize = 16; }
 
-	sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: %s width=%d height=%d fourCC=%c%c%c%c\n",
-		path, width, height, fourCCBytes[0], fourCCBytes[1], fourCCBytes[2], fourCCBytes[3]);
+	// DDS_PIXELFORMAT.dwFlags at offset 80, dwRGBBitCount at 88, dwRBitMask
+	// at 92, dwBBitMask at 100 -- DDPF_RGB (0x40) with no fourCC is a real,
+	// common DDS variant (confirmed on this level's own real lightmaps,
+	// e.g. Levels/Training/h0.dds: 32bpp, B=0x000000FF R=0x00FF0000, i.e.
+	// stored byte order B,G,R,A -- standard uncompressed D3D ARGB8888).
+	unsigned int pfFlags = header[80] | (header[81]<<8) | (header[82]<<16) | (header[83]<<24);
+	int rgbBitCount = header[88] | (header[89]<<8) | (header[90]<<16) | (header[91]<<24);
+	unsigned int rBitMask = header[92] | (header[93]<<8) | (header[94]<<16) | (header[95]<<24);
+	unsigned int gBitMask = header[96] | (header[97]<<8) | (header[98]<<16) | (header[99]<<24);
+	unsigned int bBitMask = header[100] | (header[101]<<8) | (header[102]<<16) | (header[103]<<24);
+	unsigned int aBitMask = header[104] | (header[105]<<8) | (header[106]<<16) | (header[107]<<24);
+	/* Any DDPF_RGB layout, not just 32bpp BGRA.  A lot of the HUD, lens and
+	   sky art ships as plain 24bpp RGB (Textures/cloud1.dds and
+	   Textures/Lens/haze2.dds are both 24bpp), and rejecting those is what left
+	   those elements missing or white.  The channel masks in the header say
+	   where each component sits, so honour them rather than assuming an order. */
+	bool bUncompressed = (fourCC == DDS_FOURCC_NONE) && (pfFlags & 0x40 /*DDPF_RGB*/) &&
+		(rgbBitCount == 16 || rgbBitCount == 24 || rgbBitCount == 32);
 
-	if (fourCC == DDS_FOURCC_NONE || width <= 0 || height <= 0)
+	if (width <= 0 || height <= 0 || (fourCC == DDS_FOURCC_NONE && !bUncompressed))
 	{
-		sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: unsupported DDS variant (only DXT1/3/5 handled) %s\n", path);
+		sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: unsupported DDS variant (fourCC=none pfFlags=0x%x bpp=%d) %s\n",
+			pfFlags, rgbBitCount, path);
 		pPak->FClose(fp);
 		return NULL;
 	}
 
-	int blockCountX = (width + 3) / 4;
-	int blockCountY = (height + 3) / 4;
-	long compressedSize = (long)blockCountX * blockCountY * blockSize;
+	if (bUncompressed)
+	{
+		// Vita: real base-mip-level read -- same "only mip 0" scope as the
+		// DXT path below; any additional mip levels appended after it in
+		// the file are simply not read.
+		const int srcBytesPerPixel = rgbBitCount / 8;
+		long srcSize = (long)width * height * srcBytesPerPixel;
+		long dstSize = (long)width * height * 4;
+		byte *pSrcBuf = new byte[srcSize];
+		byte *pRGBA = new byte[dstSize];
+		if (FReadChunked(pPak, pSrcBuf, srcSize, fp) != (size_t)srcSize)
+		{
+			sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: uncompressed pixel read failed for %s\n", path);
+			delete [] pSrcBuf;
+			delete [] pRGBA;
+			pPak->FClose(fp);
+			return NULL;
+		}
+		for (long i = 0; i < (long)width * height; i++)
+		{
+			// Pixels are little-endian packed into rgbBitCount bits.
+			unsigned int pixel = 0;
+			for (int byteIndex = 0; byteIndex < srcBytesPerPixel; ++byteIndex)
+				pixel |= ((unsigned int)pSrcBuf[i*srcBytesPerPixel + byteIndex]) << (byteIndex * 8);
+			pRGBA[i*4+0] = DDSExtractChannel(pixel, rBitMask, 255);
+			pRGBA[i*4+1] = DDSExtractChannel(pixel, gBitMask, 255);
+			pRGBA[i*4+2] = DDSExtractChannel(pixel, bBitMask, 255);
+			// No DDPF_ALPHAPIXELS (or no mask) means the surface is opaque.
+			pRGBA[i*4+3] = ((pfFlags & 0x1) && aBitMask)
+				? DDSExtractChannel(pixel, aBitMask, 255) : 255;
+		}
+		delete [] pSrcBuf;
+		pPak->FClose(fp);
+		*pOutW = width;
+		*pOutH = height;
+		*pOutDataSize = (int)dstSize;
+		return pRGBA;
+	}
 
-	sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: %s before compressed FRead, compressedSize=%ld\n", path, compressedSize);
+	/* Read the whole mip chain, not just the base level.  Without mip maps
+	   every minified surface aliases -- the shimmering, grainy look on
+	   anything at a distance -- and the GPU samples the full-size texture for
+	   a handful of pixels, which wastes far more bandwidth than the extra
+	   third of storage the chain costs.  dwMipMapCount sits at offset 28. */
+	int nMipCount = (int)(header[28] | (header[29]<<8) | (header[30]<<16) | (header[31]<<24));
+	if (nMipCount < 1)
+		nMipCount = 1;
+	{
+		// Never index below a 1x1 level, whatever the header claims.
+		int nMaxLevels = 1, w = width, h = height;
+		while ((w > 1 || h > 1) && nMaxLevels < 16)
+		{
+			w = (w > 1) ? (w >> 1) : 1;
+			h = (h > 1) ? (h >> 1) : 1;
+			++nMaxLevels;
+		}
+		if (nMipCount > nMaxLevels)
+			nMipCount = nMaxLevels;
+	}
+
+	long compressedSize = 0;
+	{
+		int w = width, h = height;
+		for (int nLevel = 0; nLevel < nMipCount; ++nLevel)
+		{
+			compressedSize += (long)((w + 3) / 4) * ((h + 3) / 4) * blockSize;
+			w = (w > 1) ? (w >> 1) : 1;
+			h = (h > 1) ? (h >> 1) : 1;
+		}
+	}
+
 	byte *pCompressed = new byte[compressedSize];
-	size_t nReadGot = pPak->FRead(pCompressed, 1, compressedSize, fp);
-	sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: %s after compressed FRead, got=%u\n", path, (unsigned)nReadGot);
+	size_t nReadGot = FReadChunked(pPak, pCompressed, compressedSize, fp);
+	if (nReadGot != (size_t)compressedSize && nMipCount > 1)
+	{
+		/* Some archived DDS files declare a chain they do not actually store.
+		   Fall back to the base level rather than failing the texture. */
+		nMipCount = 1;
+		compressedSize = (long)((width + 3) / 4) * ((height + 3) / 4) * blockSize;
+		if (nReadGot >= (size_t)compressedSize)
+			nReadGot = (size_t)compressedSize;
+	}
+	if (pOutMipCount)
+		*pOutMipCount = nMipCount;
 	if (nReadGot != (size_t)compressedSize)
 	{
 		sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: compressed data read failed for %s\n", path);
@@ -706,81 +2417,288 @@ static byte *LoadDDS_RGBA32(ICryPak *pPak, const char *path, int *pOutW, int *pO
 	}
 	pPak->FClose(fp);
 
-	sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: %s before block decompress loop, blocks=%dx%d\n", path, blockCountX, blockCountY);
-	byte *pRGBA = new byte[width * height * 4];
-	for (int by = 0; by < blockCountY; by++)
+	/* PowerVR SGX543MP4+ supports BC1/BC2/BC3 directly and upstream vitaGL
+	   maps these enums to SCE_GXM_TEXTURE_FORMAT_UBC1/2/3.  Keep the retail
+	   DDS blocks compressed instead of expanding every texture to RGBA8888
+	   on the ARM CPU and retaining the 4-byte-per-pixel copy in memory. */
+	switch (fourCC)
 	{
-		for (int bx = 0; bx < blockCountX; bx++)
-		{
-			const byte *pBlock = pCompressed + (long)(by * blockCountX + bx) * blockSize;
-			switch (fourCC)
-			{
-				case DDS_FOURCC_DXT1: DecompressBlockDXT1(bx*4, by*4, width, pBlock, pRGBA); break;
-				case DDS_FOURCC_DXT3: DecompressBlockDXT3(bx*4, by*4, width, pBlock, pRGBA); break;
-				case DDS_FOURCC_DXT5: DecompressBlockDXT5(bx*4, by*4, width, pBlock, pRGBA); break;
-			}
-		}
+		case DDS_FOURCC_DXT1: *pOutInternalFormat = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT; break;
+		case DDS_FOURCC_DXT3: *pOutInternalFormat = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT; break;
+		case DDS_FOURCC_DXT5: *pOutInternalFormat = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT; break;
+		default:
+			delete [] pCompressed;
+			return NULL;
 	}
-	sceClibPrintf("[BOOTTRACE] LoadDDS_RGBA32: %s after block decompress loop\n", path);
-	delete [] pCompressed;
-
 	*pOutW = width;
 	*pOutH = height;
-	return pRGBA;
+	*pOutDataSize = (int)compressedSize;
+	*pOutCompressed = true;
+	return pCompressed;
 }
 #endif
 
-ITexPic			* CVitaRenderer::EF_LoadTexture(const char* nameTex, uint flags, uint flags2, byte eTT, float fAmount1, float fAmount2, int Id, int BindId)
+static std::string MakeTextureCacheKey(const char *nameTex)
+{
+	std::string key = nameTex ? nameTex : "";
+	for (size_t i = 0; i < key.size(); ++i)
+	{
+		if (key[i] == '\\') key[i] = '/';
+		else key[i] = (char)tolower((unsigned char)key[i]);
+	}
+	const size_t slash = key.find_last_of('/');
+	const size_t dot = key.find_last_of('.');
+	if (dot == std::string::npos || (slash != std::string::npos && dot < slash))
+		key += ".dds";
+	else if (key.compare(dot, std::string::npos, ".bmp") != 0 &&
+		key.compare(dot, std::string::npos, ".dds") != 0)
+		key.replace(dot, std::string::npos, ".dds");
+	return key;
+}
+
+/* Many retail CGF materials still carry the absolute path the texture had on
+   the artist's workstation in 2004 -- "server2\Artists\masterCD\objects\..."
+   and "Harry\MASTERCD\Objects\...". Nothing under those prefixes exists at
+   runtime, so those materials loaded nothing and drew pure white (the jungle
+   canopy and tree bark, most visibly). The retail tools resolved the name
+   relative to the MasterCD root; do the same here, and fall back to the first
+   recognisable asset root for paths that never went through MasterCD. */
+static std::string NormalizeRetailTexturePath(const char *nameTex);
+static std::string MakeTextureCacheKey(const char *nameTex);
+
+bool CVitaRenderer::IsTextureKnownMissing(const char *szName)
+{
+	if (!szName || !szName[0])
+		return true;
+	return m_FailedTextureNames.find(MakeTextureCacheKey(NormalizeRetailTexturePath(szName).c_str()))
+		!= m_FailedTextureNames.end();
+}
+
+static std::string NormalizeRetailTexturePath(const char *nameTex)
+{
+	std::string name(nameTex ? nameTex : "");
+	if (name.empty())
+		return name;
+
+	std::string lower(name);
+	for (size_t i = 0; i < lower.size(); ++i)
+	{
+		if (lower[i] == '/') { lower[i] = '\\'; name[i] = '\\'; }
+		else lower[i] = (char)tolower((unsigned char)lower[i]);
+	}
+
+	const std::string masterCd = "mastercd\\";
+	size_t cut = lower.rfind(masterCd);
+	if (cut != std::string::npos)
+		return name.substr(cut + masterCd.size());
+
+	// No MasterCD marker: anchor on a known asset root instead, but only when
+	// the name is clearly absolute, so ordinary relative names pass untouched.
+	if (name.find(':') != std::string::npos || lower.find("\\artists\\") != std::string::npos)
+	{
+		static const char *roots[] = { "objects\\", "textures\\", "levels\\", "materials\\" };
+		size_t best = std::string::npos;
+		for (size_t r = 0; r < sizeof(roots) / sizeof(roots[0]); ++r)
+		{
+			const size_t at = lower.rfind(roots[r]);
+			if (at != std::string::npos && (best == std::string::npos || at < best))
+				best = at;
+		}
+		if (best != std::string::npos)
+			return name.substr(best);
+	}
+	return name;
+}
+
+ITexPic			* CVitaRenderer::EF_LoadTexture(const char* nameTexRaw, uint flags, uint flags2, byte eTT, float fAmount1, float fAmount2, int Id, int BindId)
 {
 #if defined(LINUX)
-	sceClibPrintf("[BOOTTRACE] EF_LoadTexture entered, nameTex=%s\n", nameTex ? nameTex : "(null)");
-	if (!nameTex || !iSystem || !iSystem->GetIPak())
+	if (!nameTexRaw || !iSystem || !iSystem->GetIPak())
+		return 0;
+	const std::string normalizedName = NormalizeRetailTexturePath(nameTexRaw);
+	const char *nameTex = normalizedName.c_str();
+	const std::string cacheKey = MakeTextureCacheKey(nameTex);
+	(void)0;
+	std::map<std::string, CVitaTexPic *>::iterator cached = m_TextureByName.find(cacheKey);
+	if (cached != m_TextureByName.end())
+	{
+		static bool s_reportedTextureReuse = false;
+		if (!s_reportedTextureReuse && iLog)
+		{
+			iLog->LogToFile("[VITA] texture cache reuse active");
+			s_reportedTextureReuse = true;
+		}
+		cached->second->AddRef();
+		return cached->second;
+	}
+
+	/* Negative cache.  Only successful loads were remembered, so a texture that
+	   does not exist was searched for again on every single draw of every
+	   material that references it -- a full candidate-path sweep and a set of
+	   failed CryPak opens, every frame, forever.  With a level that has a
+	   number of missing textures that is a permanent per-frame cost for
+	   something already known to be absent.  Remember the misses too. */
+	if (m_FailedTextureNames.find(cacheKey) != m_FailedTextureNames.end())
 		return 0;
 
 	ICryPak *pPak = iSystem->GetIPak();
 	int w = 0, h = 0;
-	byte *pRGBA = NULL;
+	byte *pTextureData = NULL;
+	GLenum internalFormat = GL_RGBA;
+	int dataSize = 0;
+	bool bCompressed = false;
+	int nMipCount = 1;
 
-	size_t nameLen = strlen(nameTex);
-	bool bIsBmp = nameLen >= 4 && stricmp(nameTex + nameLen - 4, ".bmp") == 0;
-	bool bIsDds = nameLen >= 4 && stricmp(nameTex + nameLen - 4, ".dds") == 0;
+	std::vector<std::string> candidates;
+	std::string requested(nameTex);
+	const size_t slash = requested.find_last_of("/\\");
+	const size_t dot = requested.find_last_of('.');
+	const bool hasExtension = dot != std::string::npos && (slash == std::string::npos || dot > slash);
+	const bool isBmp = hasExtension && stricmp(requested.c_str() + dot, ".bmp") == 0;
+	const bool hasTexturesRoot = requested.size() >= 9 &&
+		(strnicmp(requested.c_str(), "Textures/", 9) == 0 || strnicmp(requested.c_str(), "Textures\\", 9) == 0);
 
-	if (bIsBmp)
-		pRGBA = LoadBMP_RGBA32(pPak, nameTex, &w, &h);
-	else if (bIsDds)
-		pRGBA = LoadDDS_RGBA32(pPak, nameTex, &w, &h);
-	else
+	/* Crytek's texture manager searches the Textures root and replaces source
+	   extensions with the compiled DDS.  Material files often contain only a
+	   bare source name (black.tga is the canonical example), so trying just
+	   black.dds at the archive root loses a valid Textures/common/black.dds. */
+	std::string compiled = requested;
+	if (!isBmp)
 	{
-		/* Vita: real Far Cry asset names are frequently the *source*
-		   extension (.tga) or bare, but the compiled data on disk is
-		   always .dds -- swap the extension and try that real file
-		   before giving up. */
-		char ddsPath[512];
-		size_t baseLen = nameLen;
-		const char *pDot = strrchr(nameTex, '.');
-		if (pDot) baseLen = pDot - nameTex;
-		if (baseLen > sizeof(ddsPath) - 5) baseLen = sizeof(ddsPath) - 5;
-		memcpy(ddsPath, nameTex, baseLen);
-		memcpy(ddsPath + baseLen, ".dds", 5);
-		pRGBA = LoadDDS_RGBA32(pPak, ddsPath, &w, &h);
+		if (hasExtension)
+			compiled.replace(dot, std::string::npos, ".dds");
+		else
+			compiled += ".dds";
+	}
+	else
+		compiled = requested;
+
+	/* Normalise every candidate to forward slashes.  Material names arrive with
+	   backslashes and the "Textures/" prefixes added here use forward ones, so
+	   candidates ended up mixed ("Textures/Skys\Carrier\Box_12.dds") and failed
+	   to resolve against the archives -- which is why the sky box textures never
+	   loaded and the sky never drew. */
+	auto addCandidate = [&candidates](const std::string &rawPath)
+	{
+		std::string path(rawPath);
+		for (size_t i = 0; i < path.size(); ++i)
+			if (path[i] == '\\')
+				path[i] = '/';
+		for (size_t i = 0; i < candidates.size(); ++i)
+			if (stricmp(candidates[i].c_str(), path.c_str()) == 0)
+				return;
+		candidates.push_back(path);
+	};
+	addCandidate(compiled);
+	if (!hasTexturesRoot)
+		addCandidate(std::string("Textures/") + compiled);
+	if (slash == std::string::npos)
+		addCandidate(std::string("Textures/common/") + compiled);
+
+	/* Materials frequently name a subdirectory that does not exist in the
+	   shipped archives -- "Textures\hud\blue.dds" when the file is really
+	   Textures/common/blue.dds, "textures\lens\haze2.pcx" when it is
+	   Textures/Lens/haze2.dds.  Crytek's texture manager falls back to the
+	   Textures root and its common/ folder by bare name; without that, a whole
+	   class of HUD and lens art silently resolved to nothing and drew white. */
+	{
+		const size_t compiledSlash = compiled.find_last_of("/\\");
+		if (compiledSlash != std::string::npos)
+		{
+			const std::string baseName = compiled.substr(compiledSlash + 1);
+			addCandidate(std::string("Textures/") + baseName);
+			addCandidate(std::string("Textures/common/") + baseName);
+			addCandidate(baseName);
+		}
 	}
 
-	if (!pRGBA)
+	for (size_t candidateIndex = 0; candidateIndex < candidates.size() && !pTextureData; ++candidateIndex)
+	{
+		const std::string &path = candidates[candidateIndex];
+		const bool candidateBmp = path.size() >= 4 && stricmp(path.c_str() + path.size() - 4, ".bmp") == 0;
+		w = h = dataSize = 0;
+		internalFormat = GL_RGBA;
+		bCompressed = false;
+		nMipCount = 1;
+		if (candidateBmp)
+		{
+			pTextureData = LoadBMP_RGBA32(pPak, path.c_str(), &w, &h);
+			if (pTextureData)
+				dataSize = w * h * 4;
+		}
+		else
+			pTextureData = LoadDDSForVita(pPak, path.c_str(), &w, &h, &internalFormat, &dataSize, &bCompressed, &nMipCount);
+	}
+
+	if (!pTextureData)
 	{
 		/* Honest failure, no fake pixels: no ITexPic is fabricated when
 		   the real file can't be found or decoded. */
+		static std::map<std::string, bool> reportedMissing;
+		if (iLog && reportedMissing.find(cacheKey) == reportedMissing.end())
+		{
+			reportedMissing[cacheKey] = true;
+			std::string tried;
+			for (size_t i = 0; i < candidates.size(); ++i)
+			{
+				if (i) tried += " | ";
+				tried += candidates[i];
+			}
+			iLog->LogToFile("\001[VITA][TEXMISS] %s  tried: %s", nameTex, tried.c_str());
+		}
+		// Do not search for this one again on every later draw.
+		m_FailedTextureNames.insert(cacheKey);
 		return 0;
 	}
-
 	GLuint tex = 0;
 	glGenTextures(1, &tex);
 	glBindTexture(GL_TEXTURE_2D, tex);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	VitaInvalidateTextureCache(); // bound outside SetTexture
+	const bool bUseMips = bCompressed && nMipCount > 1;
+	/* Trilinear once there is a chain to filter between: without it, minified
+	   surfaces alias badly (the grainy shimmer at distance) and the GPU keeps
+	   sampling full-size textures for a few pixels. */
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+		bUseMips ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pRGBA);
-	sceClibPrintf("[BOOTTRACE] EF_LoadTexture: uploaded, tex=%u w=%d h=%d glErr=%d\n", tex, w, h, glGetError());
+	if (bCompressed)
+	{
+		const byte *pLevel = pTextureData;
+		int lw = w, lh = h;
+		for (int nLevel = 0; nLevel < nMipCount; ++nLevel)
+		{
+			const int nBlockSize = (internalFormat == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT ||
+				internalFormat == GL_COMPRESSED_RGB_S3TC_DXT1_EXT) ? 8 : 16;
+			const int nLevelSize = ((lw + 3) / 4) * ((lh + 3) / 4) * nBlockSize;
+			glCompressedTexImage2D(GL_TEXTURE_2D, nLevel, internalFormat, lw, lh, 0,
+				nLevelSize, pLevel);
+			pLevel += nLevelSize;
+			lw = (lw > 1) ? (lw >> 1) : 1;
+			lh = (lh > 1) ? (lh >> 1) : 1;
+		}
+		// No GL_TEXTURE_MAX_LEVEL in this GL profile; supplying every level
+		// down to 1x1 is what makes the chain complete.
+	}
+	else
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pTextureData);
+	GLenum uploadError = glGetError();
+	if (uploadError != GL_NO_ERROR)
+	{
+		glDeleteTextures(1, &tex);
+		delete [] pTextureData;
+		return 0;
+	}
 
-	return new CVitaTexPic(nameTex, (int)tex, w, h, pRGBA);
+	// Compressed upload data has been copied into vitaGL's CDRAM pool. Do
+	// not retain a second CPU-side copy. Raw RGBA remains available for the
+	// few legacy GetData32 paths.
+	byte *pCPUData = bCompressed ? NULL : pTextureData;
+	if (bCompressed)
+		delete [] pTextureData;
+	CVitaTexPic *pResult = new CVitaTexPic(nameTex, (int)tex, w, h, pCPUData, (int)flags, (int)flags2);
+	m_TextureById[(int)tex] = pResult;
+	m_TextureByName[cacheKey] = pResult;
+	return pResult;
 #else
 	return 0;
 #endif
@@ -814,15 +2732,8 @@ CRendElement * CVitaRenderer::EF_CreateRE(EDataType edt)
 		case eDATA_Dummy:            return new CREDummy();
 		case eDATA_TerrainParticles: return new CRETerrainParticles();
 		case eDATA_2DQuad:           return new CRE2DQuad();
-		case eDATA_ScreenProcess:
-			/* Vita: unlike CRESky/CRE2DQuad, CREScreenProcess's real
-			   constructor itself (not just mfDraw) calls into real shader
-			   loading (CScreenVars::Create() -> CPShader/CVProgram::
-			   mfForName) -- deeper than a couple of no-op virtual overrides
-			   can stand in for. Honest null: never dereferenced in
-			   C3DEngine's constructor (only SAFE_RELEASE'd, which null-
-			   checks), so this doesn't crash, it's just not implemented yet. */
-			return 0;
+		case eDATA_OcLeaf:           return new CREOcLeaf();
+		case eDATA_ScreenProcess:    return new CREScreenProcess();
 		default:
 			sceClibPrintf("[BOOTTRACE] EF_CreateRE: unhandled EDataType=%d, returning null\n", (int)edt);
 			return 0;
@@ -831,14 +2742,448 @@ CRendElement * CVitaRenderer::EF_CreateRE(EDataType edt)
 	return 0;
 #endif
 }
-void CVitaRenderer::EF_StartEf() { }
-CCObject * CVitaRenderer::EF_GetObject(bool bTemp, int num) { return 0; }
-void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRenderShaderResources * sr, CCObject * obj, int nTempl, IShader * efState, int nSort) { }
+void CVitaRenderer::EF_StartEf()
+{
+	m_nTempRenderObjectCursor = 0;
+
+	/* AddWaves appends two entries to this shared array for every bending
+	   object that asks for a wave form, and CCObject::Init() clears the
+	   per-object indices every frame -- so the entries handed out last frame
+	   can never be referenced again.  The desktop pipeline reclaims them here
+	   (Renderer.cpp: CCObject::m_Waves.SetUse(1)); this backend did not, so the
+	   array grew by two per bending object per frame and never shrank.  Left
+	   running outdoors it reached ~491k entries, at which point the allocation
+	   failed and AddWaves wrote through a null base -- and long before that the
+	   index passed 32767 and no longer fit CCObject's short m_NumWFX.
+	   SetUse only lowers the count, so the reserved capacity survives and no
+	   reallocation happens on the following frame.  Index 0 stays reserved as
+	   the "no wave" sentinel that a zero m_NumWFX means. */
+	if (CCObject::m_Waves.Num() > 1)
+		CCObject::m_Waves.SetUse(1);
+}
+CCObject * CVitaRenderer::EF_GetObject(bool bTemp, int num)
+{
+	std::vector<CCObject *> *pool = bTemp ? &m_TempRenderObjects : &m_PermanentRenderObjects;
+	size_t index;
+	if (num >= 0)
+		index = (size_t)num;
+	else if (bTemp)
+		index = m_nTempRenderObjectCursor++;
+	else
+		index = pool->size();
+
+	if (index >= pool->size())
+		pool->resize(index + 1, NULL);
+	CCObject *obj = (*pool)[index];
+	if (!obj)
+	{
+		obj = new CCObject;
+		(*pool)[index] = obj;
+	}
+	obj->m_Id = (short)index;
+	obj->m_VisId = (short)index;
+	obj->Init();
+	return obj;
+}
+
+#if defined(LINUX)
+static bool DrawVitaSkyBox(CVitaRenderer *renderer, CRESky *sky, CVitaShader *shader, CCObject *object)
+{
+	static bool reportedNoShader = false;
+	static bool reportedBase = false;
+	static bool reportedTextures = false;
+	static bool reportedDraw = false;
+	if (!renderer || !sky || !shader)
+	{
+		if (!reportedNoShader && iLog)
+		{
+			reportedNoShader = true;
+			iLog->LogToFile("\001[VITA][SKY] draw rejected: renderer=%p sky=%p shader=%p", renderer, sky, shader);
+		}
+		return false;
+	}
+	const std::string &skyBoxBase = shader->GetSkyBoxBase();
+	if (skyBoxBase.empty())
+	{
+		if (!reportedNoShader && iLog)
+		{
+			reportedNoShader = true;
+			iLog->LogToFile("\001[VITA][SKY] shader '%s' has no SkyBox mapping", shader->GetName());
+		}
+		return false;
+	}
+	if (!reportedBase && iLog)
+	{
+		reportedBase = true;
+		iLog->LogToFile("\001[VITA][SKY] shader '%s' -> '%s'", shader->GetName(), skyBoxBase.c_str());
+	}
+
+	const char *suffixes[3] = { "_12", "_34", "_5" };
+	for (int i = 0; i < 3; ++i)
+	{
+		if (!shader->GetSkyTextureId(i))
+		{
+			std::string path = skyBoxBase + suffixes[i];
+			ITexPic *texture = renderer->EF_LoadTexture(path.c_str(), FT_NOREMOVE | FT_CLAMP, 0, eTT_Base, 1.0f, 1.0f, -1, -1);
+			if (texture)
+				shader->SetSkyTextureId(i, texture->GetTextureID());
+		}
+		if (!shader->GetSkyTextureId(i))
+			return false;
+	}
+	if (!reportedTextures && iLog)
+	{
+		reportedTextures = true;
+		iLog->LogToFile("\001[VITA][SKY] textures loaded: %d %d %d", shader->GetSkyTextureId(0), shader->GetSkyTextureId(1), shader->GetSkyTextureId(2));
+	}
+
+	/* Geometry and the 3-texture packing are copied from Crytek's original
+	   CRESky::mfDraw.  The only removed pieces are desktop Cg/HDR hooks. */
+	const float size = 32.0f;
+	Vec3 camera = renderer->GetCamera().GetPos();
+	camera.z = max(0.0f, camera.z);
+	float waterCameraDifference = max(0.0f, camera.z - sky->m_fTerrainWaterLevel);
+	float maxDistanceScale = renderer->GetCamera().GetZMax() / 1024.0f;
+	if (maxDistanceScale < 0.001f) maxDistanceScale = 0.001f;
+	float p = waterCameraDifference / 128.0f + max(0.0f, waterCameraDifference * 0.03f / maxDistanceScale);
+	float d = waterCameraDifference / 10.0f * size / 124.0f - p + 8.0f;
+	p *= sky->m_fSkyBoxStretching;
+
+	/* Depth-test the sky, but pin every sky fragment to the far plane and never
+	   write depth.  GS_NODEPTHTEST simply painted the sky over whatever was
+	   already on screen, so anything drawn before it -- the wall you are
+	   crouching behind -- was overwritten by sky.  Clamping the depth range
+	   instead makes the draw independent of where the engine submits the sky in
+	   the frame: geometry drawn earlier occludes it because its depth is less
+	   than 1.0, and geometry drawn later still covers it because the sky left
+	   the depth buffer untouched. */
+	renderer->SetState(sky->m_fAlpha < 1.0f
+		? GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA
+		: 0);
+	glDepthRangef(1.0f, 1.0f);
+	renderer->SetCullMode(R_CULL_BACK);
+	glColor4f(1.0f, 1.0f, 1.0f, sky->m_fAlpha);
+	const bool hasObjectTransform = object && (object->m_ObjFlags & FOB_TRANS_MASK);
+	if (hasObjectTransform)
+	{
+		renderer->PushMatrix();
+		renderer->MultMatrix(object->m_Matrix.GetData());
+	}
+
+	struct_VERTEX_FORMAT_P3F_TEX2F top[] = {
+		{ Vec3( size,-size, size), 1, 0 }, { Vec3(-size,-size, size), 0, 0 },
+		{ Vec3( size, size, size), 1, 1 }, { Vec3(-size, size, size), 0, 1 }
+	};
+	renderer->SetTexture(shader->GetSkyTextureId(2), eTT_Base);
+	renderer->DrawTriStrip(&(CVertexBuffer(top, VERTEX_FORMAT_P3F_TEX2F)), 4);
+
+	struct_VERTEX_FORMAT_P3F_TEX2F south[] = {
+		{ Vec3(-size,-size, size), 1, 0 }, { Vec3( size,-size, size), 0, 0 },
+		{ Vec3(-size,-size,-p),   1, .5f }, { Vec3( size,-size,-p),   0, .5f },
+		{ Vec3(-size,-size,-d),   1, .5f }, { Vec3( size,-size,-d),   0, .5f }
+	};
+	renderer->SetTexture(shader->GetSkyTextureId(1), eTT_Base);
+	renderer->DrawTriStrip(&(CVertexBuffer(south, VERTEX_FORMAT_P3F_TEX2F)), 6);
+
+	struct_VERTEX_FORMAT_P3F_TEX2F east[] = {
+		{ Vec3(-size, size, size), 1, 1 }, { Vec3(-size,-size, size), 0, 1 },
+		{ Vec3(-size, size,-p),    1, .5f }, { Vec3(-size,-size,-p),    0, .5f },
+		{ Vec3(-size, size,-d),    1, .5f }, { Vec3(-size,-size,-d),    0, .5f }
+	};
+	renderer->SetTexture(shader->GetSkyTextureId(1), eTT_Base);
+	renderer->DrawTriStrip(&(CVertexBuffer(east, VERTEX_FORMAT_P3F_TEX2F)), 6);
+
+	struct_VERTEX_FORMAT_P3F_TEX2F north[] = {
+		{ Vec3( size, size, size), 1, 0 }, { Vec3(-size, size, size), 0, 0 },
+		{ Vec3( size, size,-p),    1, .5f }, { Vec3(-size, size,-p),    0, .5f },
+		{ Vec3( size, size,-d),    1, .5f }, { Vec3(-size, size,-d),    0, .5f }
+	};
+	renderer->SetTexture(shader->GetSkyTextureId(0), eTT_Base);
+	renderer->DrawTriStrip(&(CVertexBuffer(north, VERTEX_FORMAT_P3F_TEX2F)), 6);
+
+	struct_VERTEX_FORMAT_P3F_TEX2F west[] = {
+		{ Vec3( size,-size, size), 1, 1 }, { Vec3( size, size, size), 0, 1 },
+		{ Vec3( size,-size,-p),    1, .5f }, { Vec3( size, size,-p),    0, .5f },
+		{ Vec3( size,-size,-d),    1, .5f }, { Vec3( size, size,-d),    0, .5f }
+	};
+	renderer->SetTexture(shader->GetSkyTextureId(0), eTT_Base);
+	renderer->DrawTriStrip(&(CVertexBuffer(west, VERTEX_FORMAT_P3F_TEX2F)), 6);
+
+	if (hasObjectTransform)
+		renderer->PopMatrix();
+	glDepthRangef(0.0f, 1.0f);
+	renderer->SetState(GS_DEPTHWRITE);
+	renderer->SetCullMode(R_CULL_BACK);
+	glColor4f(1, 1, 1, 1);
+	if (!reportedDraw && iLog)
+	{
+		reportedDraw = true;
+		iLog->LogToFile("\001[VITA][SKY] skybox draw submitted");
+	}
+	return true;
+}
+#endif
+
+void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRenderShaderResources * sr, CCObject * obj, int nTempl, IShader * efState, int nSort)
+{
+#if defined(LINUX)
+	if (!re)
+		return;
+	if (re->mfGetType() == eDATA_OcLeaf)
+	{
+		CREOcLeaf *leafElement = static_cast<CREOcLeaf *>(re);
+		CLeafBuffer *leaf = leafElement->m_pBuffer;
+		CMatInfo *chunk = leafElement->m_pChunk;
+
+		/* Record what actually arrives here and whether it survives to the
+		   draw.  Invisible geometry is otherwise indistinguishable from
+		   geometry that was never submitted, and guessing between those two
+		   has cost several round trips already. */
+		{
+			static std::map<std::string, bool> s_reportedSubmit;
+			const std::string src = (leaf && leaf->m_sSource) ? leaf->m_sSource : "<null-leaf>";
+			if (iLog && s_reportedSubmit.size() < 96 &&
+				s_reportedSubmit.find(src) == s_reportedSubmit.end())
+			{
+				s_reportedSubmit[src] = true;
+				iLog->LogToFile("\001[VITA][SUBMIT] %s vb=%s inds=%d dyn=%d shader=%s",
+					src.c_str(),
+					(leaf && leaf->m_pVertexBuffer) ? "yes" : "NO",
+					chunk ? chunk->nNumIndices : -1,
+					(leaf && leaf->m_pVertexBuffer) ? (int)leaf->m_pVertexBuffer->m_bDynamic : -1,
+					(ef && ef->GetName()) ? ef->GetName() : "<null>");
+			}
+		}
+
+		if (!leaf || !chunk || !leaf->m_pVertexBuffer || chunk->nNumIndices <= 0)
+			return;
+
+		const char *vitaShaderName = (ef && ef->GetName()) ? ef->GetName() : "";
+		// Collision-only proxy: has no texture, so drawing it painted white.
+		if (VitaMaterial::IsNoDraw(vitaShaderName))
+			return;
+
+		int renderState = GS_DEPTHWRITE;
+		/* Cut-out foliage rule -- but only for static geometry.  The test is a
+		   guess made from the shader's name, and character diffuse maps
+		   routinely carry a specular/gloss mask in alpha rather than coverage.
+		   Applying a >=0.5 alpha test to one of those discards every fragment
+		   and the character vanishes completely, which is exactly the symptom.
+		   Skinned meshes are never cut-out foliage, so exclude them. */
+		const bool bSkinnedMesh = leaf->m_pVertexBuffer->m_bDynamic != 0;
+		if (!bSkinnedMesh && VitaMaterial::NeedsAlphaTest(vitaShaderName))
+			renderState |= GS_ALPHATEST_GEQUAL128;
+		if (sr)
+		{
+			// Same reasoning as above: never alpha-test a skinned mesh.
+			if (!bSkinnedMesh)
+			{
+				if (sr->m_AlphaRef >= 0.5f) renderState |= GS_ALPHATEST_GEQUAL128;
+				else if (sr->m_AlphaRef > 0.0f) renderState |= GS_ALPHATEST_GEQUAL64;
+			}
+			if (sr->m_Opacity < 0.999f)
+			{
+				renderState &= ~GS_DEPTHWRITE;
+				renderState |= (sr->m_ResFlags & MTLFLAG_ADDITIVE)
+					? (GS_BLSRC_ONE | GS_BLDST_ONE)
+					: (GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA);
+			}
+			SetCullMode((sr->m_ResFlags & MTLFLAG_2SIDED) ? R_CULL_NONE : R_CULL_BACK);
+		}
+		else
+			SetCullMode(R_CULL_BACK);
+		SetState(renderState);
+
+		SEfResTexture *diffuse = sr ? sr->m_Textures[EFTT_DIFFUSE] : NULL;
+		if (diffuse && !diffuse->m_TU.m_ITexPic && !diffuse->m_Name.empty() &&
+			g_nLazyTextureLoadsThisFrame < kMaxLazyTextureLoadsPerFrame)
+		{
+			++g_nLazyTextureLoadsThisFrame;
+			std::string textureName = diffuse->m_Name.c_str();
+			ITexPic *loaded = EF_LoadTexture(textureName.c_str(), diffuse->m_TU.GetTexFlags(),
+				diffuse->m_TU.GetTexFlags2(), eTT_Base, 1.0f, 1.0f, -1, -1);
+			/* Only prefix the material's folder onto a bare file name.  Many
+			   materials already name the texture from the data root, and
+			   prepending there built nonsense like
+			   "Objects/Indoor/boxes/crates/Objects/Indoor/crates/crate1.dds",
+			   which of course missed -- and a missed diffuse draws solid
+			   white, which is where a lot of the white surfaces came from. */
+			if (!loaded && !sr->m_TexturePath.empty())
+			{
+				std::string lowerName = textureName;
+				for (size_t i = 0; i < lowerName.size(); ++i)
+					lowerName[i] = (char)tolower((unsigned char)lowerName[i]);
+				for (size_t i = 0; i < lowerName.size(); ++i)
+					if (lowerName[i] == '\\') lowerName[i] = '/';
+				const bool bAlreadyRooted =
+					lowerName.compare(0, 8, "objects/") == 0 ||
+					lowerName.compare(0, 9, "textures/") == 0 ||
+					lowerName.compare(0, 7, "levels/") == 0 ||
+					lowerName.compare(0, 10, "materials/") == 0;
+				if (!bAlreadyRooted)
+				{
+					std::string fullName = sr->m_TexturePath.c_str();
+					if (fullName[fullName.size()-1] != '/' && fullName[fullName.size()-1] != '\\')
+						fullName += '/';
+					fullName += textureName;
+					loaded = EF_LoadTexture(fullName.c_str(), diffuse->m_TU.GetTexFlags(),
+						diffuse->m_TU.GetTexFlags2(), eTT_Base, 1.0f, 1.0f, -1, -1);
+				}
+			}
+			diffuse->m_TU.m_ITexPic = loaded;
+		}
+		else if (diffuse && !diffuse->m_TU.m_ITexPic && !diffuse->m_Name.empty() &&
+			!IsTextureKnownMissing(diffuse->m_Name.c_str()))
+		{
+			/* Its load was pushed to a later frame by the budget above.  Drawing
+			   it now would paint the surface solid white until the texture
+			   arrives, which is the white flashing seen while moving -- leave
+			   the chunk out for a frame instead and let it appear textured.
+			   Textures already proven absent are excluded, or those surfaces
+			   would never be drawn at all. */
+			return;
+		}
+		if (diffuse && diffuse->m_TU.m_ITexPic)
+			SetTexture(diffuse->m_TU.m_ITexPic->GetTextureID(), eTT_Base);
+		else if (leafElement->m_CustomTexBind[0] > 0 && leafElement->m_CustomTexBind[0] != 0x1000)
+			SetTexture(leafElement->m_CustomTexBind[0], eTT_Base);
+		else
+		{
+			/* Same white fallback CLeafBuffer::Draw has, and it needs the same
+			   reporting: geometry submitted through EF_AddEf (terrain sectors,
+			   the ocean plane, anything the 3D engine queues rather than draws
+			   itself) was silently rendering pure white with nothing naming it. */
+			SetWhiteTexture();
+			static std::map<std::string, bool> s_reportedWhite;
+			std::string key = (ef && ef->GetName()) ? ef->GetName() : "<null-shader>";
+			key += "|";
+			if (diffuse)
+				key += diffuse->m_Name.c_str();
+			if (s_reportedWhite.size() < 256 && s_reportedWhite.find(key) == s_reportedWhite.end())
+			{
+				s_reportedWhite[key] = true;
+				if (iLog)
+					iLog->LogToFile("\001[VITA][EFWHITE] shader=%s diffuse=%s tris=%d",
+						(ef && ef->GetName()) ? ef->GetName() : "<null>",
+						diffuse ? diffuse->m_Name.c_str() : "<none>",
+						chunk->nNumIndices / 3);
+			}
+		}
+
+		/* Baked lighting.  Far Cry stores the world's static lighting in
+		   lightmaps, not in the vertex colours, so drawing only the diffuse
+		   texture leaves everything evenly lit and flat -- no sun, no shadow,
+		   no bounce.  CBrush::Render hands the colour/lerp lightmap and its own
+		   texture-coordinate buffer down on the render object, so modulate it in
+		   on texture unit 1.
+
+		   KNOWN WRONG, which is why r_lightmaps defaults to 0.  The UV stream
+		   below is bound alongside the PRIMARY vertex buffer, but
+		   CBrush::SetLightmap builds it with one entry per vertex of the
+		   SECONDARY buffer (it sizes the array by pLeafBuffer->m_SecVertCount
+		   and errors out when the counts disagree).  The two buffers differ in
+		   both length and ordering, so every coordinate lands on the wrong
+		   vertex and the result is blotches of black and white instead of
+		   shading.  Fixing this means either sourcing the LM coordinates
+		   through the secondary buffer's own index mapping, or drawing this
+		   pass from m_pSecVertBuffer -- not simply re-binding the same array. */
+		bool bLightMapBound = false;
+		if (obj && obj->m_pLMTCBufferO && LightMapsEnabled())
+		{
+			SEfResTexture *lmTexture = sr ? sr->m_Textures[EFTT_LIGHTMAP] : NULL;
+			const int lmTex = (lmTexture && lmTexture->m_TU.m_ITexPic)
+				? lmTexture->m_TU.m_ITexPic->GetTextureID() : 0;
+			CVertexBuffer *lmVB = obj->m_pLMTCBufferO->m_pVertexBuffer;
+			const byte *lmData = lmVB ? (const byte *)lmVB->m_VS[VSF_GENERAL].m_VData : NULL;
+			/* The coordinate array is indexed here by the primary buffer's
+			   vertex numbering, but CBrush::SetLightmap sized it by the
+			   SECONDARY buffer (m_SecVertCount).  Where those counts agree the
+			   numbering lines up and the mapping is valid; where they do not,
+			   binding it reads coordinates belonging to other vertices and
+			   paints black and white blotches instead of shading.  Require the
+			   array to cover every vertex we will index rather than trusting
+			   that it does. */
+			const bool bCoordsCoverMesh = lmVB && leaf->m_pVertexBuffer &&
+				lmVB->m_NumVerts >= leaf->m_pVertexBuffer->m_NumVerts;
+			if (lmTex > 0 && lmData && bCoordsCoverMesh)
+			{
+				glActiveTexture(GL_TEXTURE1);
+				glEnable(GL_TEXTURE_2D);
+				glBindTexture(GL_TEXTURE_2D, (GLuint)lmTex);
+				glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+				glClientActiveTexture(GL_TEXTURE1);
+				glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+				// VERTEX_FORMAT_TEX2F: two floats per vertex, nothing else.
+				glTexCoordPointer(2, GL_FLOAT, m_VertexSize[lmVB->m_vertexformat], lmData);
+				glClientActiveTexture(GL_TEXTURE0);
+				glActiveTexture(GL_TEXTURE0);
+				bLightMapBound = true;
+			}
+		}
+
+		const bool hasObjectTransform = obj && (obj->m_ObjFlags & FOB_TRANS_MASK);
+		if (hasObjectTransform)
+		{
+			PushMatrix();
+			MultMatrix(obj->m_Matrix.GetData());
+		}
+		DrawBuffer(leaf->m_pVertexBuffer, &leaf->m_Indices, chunk->nNumIndices,
+			chunk->nFirstIndexId, leaf->m_nPrimetiveType, chunk->nFirstVertId,
+			chunk->nFirstVertId + chunk->nNumVerts, chunk);
+		if (hasObjectTransform)
+			PopMatrix();
+
+		if (bLightMapBound)
+		{
+			// Leave unit 1 off, or every later draw inherits this lightmap.
+			glClientActiveTexture(GL_TEXTURE1);
+			glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+			glActiveTexture(GL_TEXTURE1);
+			glDisable(GL_TEXTURE_2D);
+			glActiveTexture(GL_TEXTURE0);
+			glClientActiveTexture(GL_TEXTURE0);
+		}
+
+		static std::map<std::string, bool> reportedCharacterBuffers;
+		const std::string source = leaf->m_sSource ? leaf->m_sSource : "<null>";
+		if (reportedCharacterBuffers.size() < 16 && reportedCharacterBuffers.find(source) == reportedCharacterBuffers.end())
+		{
+			reportedCharacterBuffers[source] = true;
+			sceClibPrintf("[VITARE] source=%s fmt=%d verts=%d inds=%d shader=%s tex=%d\n",
+				source.c_str(), leaf->m_pVertexBuffer->m_vertexformat,
+				leaf->m_pVertexBuffer->m_NumVerts, chunk->nNumIndices,
+				ef ? ef->GetName() : "<null>",
+				(diffuse && diffuse->m_TU.m_ITexPic) ? diffuse->m_TU.m_ITexPic->GetTextureID() : leafElement->m_CustomTexBind[0]);
+			fflush(stdout);
+		}
+		return;
+	}
+	if (re->mfGetType() == eDATA_Sky)
+	{
+		static bool reportedSkySubmit = false;
+		CVitaShader *vitaShader = dynamic_cast<CVitaShader *>(ef);
+		if (!reportedSkySubmit && iLog)
+		{
+			reportedSkySubmit = true;
+			iLog->LogToFile("\001[VITA][SKY] eDATA_Sky submitted with shader '%s'", ef ? ef->GetName() : "<null>");
+		}
+		DrawVitaSkyBox(this, static_cast<CRESky *>(re), vitaShader, obj);
+	}
+#endif
+}
 void CVitaRenderer::EF_EndEf3D(int nFlags) { }
-bool CVitaRenderer::EF_IsFakeDLight(CDLight * Source) { return false; }
-void CVitaRenderer::EF_ADDDlight(CDLight * Source) { }
-void CVitaRenderer::EF_ClearLightsList() { }
-bool CVitaRenderer::EF_UpdateDLight(CDLight * pDL) { return false; }
+bool CVitaRenderer::EF_IsFakeDLight(CDLight * Source) { return Source == NULL; }
+void CVitaRenderer::EF_ADDDlight(CDLight * Source)
+{
+	/* C3DEngine uses the assigned ID to build per-object light masks even on
+	   the low fixed-function path. Leaving it at -1 made the engine reject
+	   every visible light and emit an assert for each one every frame. */
+	if (!Source || m_nActiveLights >= 32)
+		return;
+	Source->m_Id = m_nActiveLights++;
+}
+void CVitaRenderer::EF_ClearLightsList() { m_nActiveLights = 0; }
+bool CVitaRenderer::EF_UpdateDLight(CDLight * pDL) { return pDL != NULL; }
 void CVitaRenderer::EF_EndEf2D(bool bSort) { }
 bool CVitaRenderer::EF_DrawEfForName(char * name, float x, float y, float width, float height, CFColor& col, int nTempl) { return false; }
 bool CVitaRenderer::EF_DrawEfForNum(int num, float x, float y, float width, float height, CFColor& col, int nTempl) { return false; }
@@ -853,49 +3198,176 @@ void CVitaRenderer::EF_SetWorldColor(float r, float g, float b, float a) { }
 int CVitaRenderer::EF_RegisterFogVolume(float fMaxFogDist, float fFogLayerZ, CFColor color, int nIndex, bool bCaustics) { return 0; }
 int CVitaRenderer::GetPolyCount() { return 0; }
 void CVitaRenderer::GetPolyCount(int & nPolygons, int & nShadowVolPolys) { }
-void CVitaRenderer::SetClearColor(const Vec3 & vColor) { }
-CLeafBuffer * CVitaRenderer::CreateLeafBuffer(bool bDynamic, const char * szSource, class CIndexedMesh * pIndexedMesh) { return 0; }
-CLeafBuffer * CVitaRenderer::CreateLeafBufferInitialized(void * pVertBuffer, int nVertCount, int nVertFormat, ushort* pIndices, int nIndices, int nPrimetiveType, const char * szSource, EBufferType eBufType, int nMatInfoCount, int nClientTextureBindID, bool (*PrepareBufferCallback)(CLeafBuffer *, bool), void * CustomData, bool bOnlyVideoBuffer, bool bPrecache) { return 0; }
-void CVitaRenderer::DeleteLeafBuffer(CLeafBuffer * pLBuffer) { }
-int CVitaRenderer::GetFrameID(bool bIncludeRecursiveCalls) { return 0; }
+void CVitaRenderer::SetClearColor(const Vec3 & vColor) { m_vClearColor = vColor; }
+// Vita: real implementations in engine_port/LeafBufferVita.cpp, alongside
+// the rest of CLeafBuffer's Vita-side support.
+int CVitaRenderer::GetFrameID(bool bIncludeRecursiveCalls) { return m_nFrameId; }
 void CVitaRenderer::MakeMatrix(const Vec3 & pos, const Vec3 & angles, const Vec3 & scale, Matrix44* mat) { }
 void CVitaRenderer::DrawLabelImage(const Vec3 & vPos, float fSize, int nTextureId) { }
 void CVitaRenderer::DrawLabel(Vec3 pos, float font_size, const char * label_text, ...) { }
 void CVitaRenderer::DrawLabelEx(Vec3 pos, float font_size, float * pfColor, bool bFixedSize, bool bCenter, const char * label_text, ...) { }
 void CVitaRenderer::Draw2dLabel(float x, float y, float font_size, float * pfColor, bool bCenter, const char * label_text, ...) { }
-float CVitaRenderer::ScaleCoordX(float value) { return value; }
-float CVitaRenderer::ScaleCoordY(float value) { return value; }
-void CVitaRenderer::SetState(int State) { }
-void CVitaRenderer::SetCullMode(int mode) { }
-bool CVitaRenderer::EnableFog(bool enable) { return false; }
-void CVitaRenderer::SetFog(float density, float fogstart, float fogend, const float * color, int fogmode) { }
+float CVitaRenderer::ScaleCoordX(float value) { return value * (float)m_nWidth / 800.0f; }
+float CVitaRenderer::ScaleCoordY(float value) { return value * (float)m_nHeight / 600.0f; }
+bool CVitaRenderer::EnableFog(bool enable)
+{
+	bool previous = s_vitaFogEnabled;
+	s_vitaFogEnabled = enable;
+#if defined(LINUX)
+	if (enable)
+		glEnable(GL_FOG);
+	else
+		glDisable(GL_FOG);
+#endif
+	return previous;
+}
+void CVitaRenderer::SetFog(float density, float fogstart, float fogend, const float * color, int fogmode)
+{
+	s_vitaFogDensity = density;
+	s_vitaFogStart = fogstart;
+	s_vitaFogEnd = fogend;
+	s_vitaFogMode = fogmode;
+	if (color)
+		s_vitaFogColor = CFColor(color[0], color[1], color[2], 1.0f);
+#if defined(LINUX)
+	glFogi(GL_FOG_MODE, fogmode == R_FOGMODE_EXP2 ? GL_EXP2 : GL_LINEAR);
+	glFogf(GL_FOG_DENSITY, density);
+	glFogf(GL_FOG_START, fogstart);
+	glFogf(GL_FOG_END, fogend);
+	glFogfv(GL_FOG_COLOR, &s_vitaFogColor[0]);
+#endif
+}
 void CVitaRenderer::EnableTexGen(bool enable) { }
 void CVitaRenderer::SetTexgen(float scaleX, float scaleY, float translateX, float translateY) { }
 void CVitaRenderer::SetTexgen3D(float x1, float y1, float z1, float x2, float y2, float z2) { }
 void CVitaRenderer::SetLodBias(float value) { }
 void CVitaRenderer::SetColorOp(byte eCo, byte eAo, byte eCa, byte eAa) { }
 void CVitaRenderer::EnableVSync(bool enable) { }
-void CVitaRenderer::PushMatrix() { }
-void CVitaRenderer::RotateMatrix(float a, float x, float y, float z) { }
-void CVitaRenderer::RotateMatrix(const Vec3 & angels) { }
-void CVitaRenderer::TranslateMatrix(float x, float y, float z) { }
-void CVitaRenderer::ScaleMatrix(float x, float y, float z) { }
-void CVitaRenderer::TranslateMatrix(const Vec3 & pos) { }
-void CVitaRenderer::MultMatrix(float * mat) { }
-void CVitaRenderer::LoadMatrix(const Matrix44 * src) { }
-void CVitaRenderer::PopMatrix() { }
 void CVitaRenderer::EnableTMU(bool enable) { }
 void CVitaRenderer::SelectTMU(int tnum) { }
-unsigned int CVitaRenderer::DownLoadToVideoMemory(unsigned char * data, int w, int h, ETEX_Format eTFSrc, ETEX_Format eTFDst, int nummipmap, bool repeat, int filter, int Id, char * szCacheName, int flags) { return 0; }
-void CVitaRenderer::UpdateTextureInVideoMemory(uint tnum, unsigned char * newdata, int posx, int posy, int w, int h, ETEX_Format eTFSrc) { }
+/* Real dynamic textures.  CUIVideoPanel uploads a decoded video frame through
+   these every frame, so they had to stop being stubs before any cut scene could
+   appear.  Only the 32-bit paths the video panel uses are handled; the source
+   buffer is always four bytes per pixel here. */
+unsigned int CVitaRenderer::DownLoadToVideoMemory(unsigned char * data, int w, int h, ETEX_Format eTFSrc, ETEX_Format eTFDst, int nummipmap, bool repeat, int filter, int Id, char * szCacheName, int flags)
+{
+#if defined(LINUX)
+	if (w <= 0 || h <= 0)
+		return 0;
+	GLuint tex = 0;
+	glGenTextures(1, &tex);
+	if (!tex)
+		return 0;
+	glBindTexture(GL_TEXTURE_2D, tex);
+	VitaInvalidateTextureCache(); // bound outside SetTexture
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
+	/* The source format was being ignored and everything uploaded as RGBA8888.
+	   The terrain sector textures come through here as raw DXT1 straight out of
+	   terrain/cover.ctc, so a 128x128 tile handed over 8 KB of blocks and this
+	   read 64 KB of it as uncompressed pixels -- 56 KB past the end of the
+	   buffer, with whatever it found becoming the "texture".  That is where the
+	   white/garbage terrain came from, and it was corrupting the heap besides. */
+	GLenum eCompressedFormat = 0;
+	int nBlockBytes = 0;
+	switch (eTFSrc)
+	{
+		case eTF_DXT1: eCompressedFormat = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT; nBlockBytes = 8;  break;
+		case eTF_DXT3: eCompressedFormat = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT; nBlockBytes = 16; break;
+		case eTF_DXT5: eCompressedFormat = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT; nBlockBytes = 16; break;
+		default: break;
+	}
+	if (eCompressedFormat && data)
+	{
+		const int nSize = ((w + 3) / 4) * ((h + 3) / 4) * nBlockBytes;
+		glCompressedTexImage2D(GL_TEXTURE_2D, 0, eCompressedFormat, w, h, 0, nSize, data);
+	}
+	else
+	{
+		// data may be null: the caller then fills it with UpdateTextureInVideoMemory.
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+	}
+	if (glGetError() != GL_NO_ERROR)
+	{
+		glDeleteTextures(1, &tex);
+		return 0;
+	}
+	return (unsigned int)tex;
+#else
+	return 0;
+#endif
+}
+
+void CVitaRenderer::UpdateTextureInVideoMemory(uint tnum, unsigned char * newdata, int posx, int posy, int w, int h, ETEX_Format eTFSrc)
+{
+#if defined(LINUX)
+	if (!tnum || !newdata || w <= 0 || h <= 0)
+		return;
+	glBindTexture(GL_TEXTURE_2D, (GLuint)tnum);
+	VitaInvalidateTextureCache(); // bound outside SetTexture
+	// Same format trap as DownLoadToVideoMemory: the terrain texture pool feeds
+	// DXT1 blocks through here, which must not be read as RGBA8888.
+	GLenum eCompressedFormat = 0;
+	int nBlockBytes = 0;
+	switch (eTFSrc)
+	{
+		case eTF_DXT1: eCompressedFormat = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT; nBlockBytes = 8;  break;
+		case eTF_DXT3: eCompressedFormat = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT; nBlockBytes = 16; break;
+		case eTF_DXT5: eCompressedFormat = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT; nBlockBytes = 16; break;
+		default: break;
+	}
+	if (eCompressedFormat)
+	{
+		/* A compressed sub-image has to land on block boundaries; the pool
+		   always replaces the whole texture, so upload it as a fresh level
+		   rather than risking a partial block update. */
+		const int nSize = ((w + 3) / 4) * ((h + 3) / 4) * nBlockBytes;
+		glCompressedTexImage2D(GL_TEXTURE_2D, 0, eCompressedFormat, w, h, 0, nSize, newdata);
+	}
+	else
+		glTexSubImage2D(GL_TEXTURE_2D, 0, posx, posy, w, h, GL_RGBA, GL_UNSIGNED_BYTE, newdata);
+#endif
+}
 unsigned int CVitaRenderer::LoadTexture(const char * filename, int * tex_type, unsigned int def_tid, bool compresstodisk, bool bWarn) { return 0; }
 bool CVitaRenderer::DXTCompress(byte * raw_data, int nWidth, int nHeight, ETEX_Format eTF, bool bUseHW, bool bGenMips, int nSrcBytesPerPix, MIPDXTcallback callback) { return false; }
 bool CVitaRenderer::DXTDecompress(byte * srcData, byte * dstData, int nWidth, int nHeight, ETEX_Format eSrcTF, bool bUseHW, int nDstBytesPerPix) { return false; }
-void CVitaRenderer::RemoveTexture(unsigned int TextureId) { }
-void CVitaRenderer::RemoveTexture(ITexPic * pTexPic) { }
+void CVitaRenderer::RemoveTexture(unsigned int TextureId)
+{
+	std::map<int, CVitaTexPic *>::iterator it = m_TextureById.find((int)TextureId);
+	if (it == m_TextureById.end())
+		return;
+	CVitaTexPic *pTexture = it->second;
+	/* Script texture userdata is garbage-collected after its numeric ID has
+	   been copied into long-lived UI widgets. The retail texture manager
+	   honours FT_NOREMOVE here; deleting it made GL recycle the ID for a
+	   font atlas, so the mouse cursor rendered arbitrary glyph blocks. */
+	if (pTexture->GetFlags() & FT_NOREMOVE)
+		return;
+	m_TextureById.erase(it);
+	pTexture->Release(true);
+}
+void CVitaRenderer::RemoveTexture(ITexPic * pTexPic)
+{
+	if (pTexPic)
+		RemoveTexture((unsigned int)pTexPic->GetTextureID());
+}
 void CVitaRenderer::TextToScreen(float x, float y, const char * format, ...) { }
 void CVitaRenderer::TextToScreenColor(int x, int y, float r, float g, float b, float a, const char * format, ...) { }
-void CVitaRenderer::ResetToDefault() { }
+void CVitaRenderer::ResetToDefault()
+{
+#if defined(LINUX)
+	glDisable(GL_BLEND);
+	glDisable(GL_ALPHA_TEST);
+	glDisable(GL_SCISSOR_TEST);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LEQUAL);
+	glDepthMask(GL_TRUE);
+	glColor4f(1, 1, 1, 1);
+	SetViewport(0, 0, m_nWidth, m_nHeight);
+#endif
+}
 int CVitaRenderer::GenerateAlphaGlowTexture(float k) { return 0; }
 void CVitaRenderer::SetMaterialColor(float r, float g, float b, float a) { }
 int CVitaRenderer::LoadAnimatedTexture(const char * format, const int nCount) { return 0; }
@@ -913,10 +3385,30 @@ void CVitaRenderer::FlushTextMessages() { }
 void CVitaRenderer::DrawObjSprites(list2<CStatObjInst*> * pList, float fMaxViewDist, CObjManager * pObjMan) { }
 void CVitaRenderer::DrawQuad(const Vec3 & right, const Vec3 & up, const Vec3 & origin, int nFlipMode) { }
 void CVitaRenderer::DrawQuad(float dy, float dx, float dz, float x, float y, float z) { }
-void CVitaRenderer::ClearDepthBuffer() { }
-void CVitaRenderer::ClearColorBuffer(const Vec3 vColor) { }
+void CVitaRenderer::ClearDepthBuffer()
+{
+#if defined(LINUX)
+	glClear(GL_DEPTH_BUFFER_BIT);
+#endif
+}
+void CVitaRenderer::ClearColorBuffer(const Vec3 vColor)
+{
+#if defined(LINUX)
+	glClearColor(vColor.x, vColor.y, vColor.z, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	glClearColor(m_vClearColor.x, m_vClearColor.y, m_vClearColor.z, 1.0f);
+#endif
+}
 void CVitaRenderer::ReadFrameBuffer(unsigned char * pRGB, int nSizeX, int nSizeY, bool bBackBuffer, bool bRGBA, int nScaledX, int nScaledY) { }
-void CVitaRenderer::SetFogColor(float * color) { }
+void CVitaRenderer::SetFogColor(float * color)
+{
+	if (!color)
+		return;
+	s_vitaFogColor = CFColor(color[0], color[1], color[2], 1.0f);
+#if defined(LINUX)
+	glFogfv(GL_FOG_COLOR, &s_vitaFogColor[0]);
+#endif
+}
 void CVitaRenderer::TransformTextureMatrix(float x, float y, float angle, float scale) { }
 void CVitaRenderer::ResetTextureMatrix() { }
 char* CVitaRenderer::GetVertexProfile(bool bSupportedProfile) { return 0; }
