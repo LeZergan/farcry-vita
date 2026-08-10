@@ -319,7 +319,19 @@ void CSectorInfo::FillBuffer(int nStep)
 		   preset), so rewrite the colour into the greyscale brightness the
 		   fixed-function path can actually use, and leave alpha opaque. */
 		{
-			const byte ucBright = (byte)FtoI(fBright*255.0f);
+			/* Floor the brightness.  The sector texture is modulated by this
+			   value, so wherever the terrain lighting resolves to zero the
+			   ground multiplies out to solid black and the texture disappears
+			   entirely -- which is the black ground still showing up in places.
+			   Retail never looks like that because its terrain shader adds an
+			   ambient term this fixed-function path has no equivalent for, so
+			   keep a floor here instead: dark, but still showing the ground. */
+			float fLitBright = fBright;
+			if (fLitBright < 0.22f)
+				fLitBright = 0.22f;
+			else if (fLitBright > 1.0f)
+				fLitBright = 1.0f;
+			const byte ucBright = (byte)FtoI(fLitBright*255.0f);
 			vert.color.bcolor[0] = ucBright;
 			vert.color.bcolor[1] = ucBright;
 			vert.color.bcolor[2] = ucBright;

@@ -732,27 +732,31 @@ void CPlayer::UpdateDead( SPlayerUpdateContext &ctx )
 
 //		UpdateDrawAngles( );
 
+#if defined(__vita__)
+	/* Put the local player into first person and keep his body from being drawn.
+	   m_bFirstPerson starts false (third person), and on a level started fresh
+	   nothing ever turns it on -- SetViewMode is otherwise only reached from a
+	   save-game restore or a manual view toggle.  The third-person camera then
+	   sits at zero distance, i.e. inside the character, which is why you end up
+	   looking around from within his model.  Far Cry is a first-person game, so
+	   select that once, and issue the DrawCharacter(0,0) that stops drawing the
+	   body.  Done once rather than every frame so the dev-mode view toggle and
+	   the vehicle third-person camera still work afterwards; skipped entirely
+	   while in a vehicle, where third person is the intended view. */
+	if (IsMyPlayer() && !m_pVehicle)
+	{
+		static bool s_bForcedFirstPerson = false;
+		if (!s_bForcedFirstPerson)
+		{
+			s_bForcedFirstPerson = true;
+			m_bFirstPerson = true;
+			SetViewMode(false);
+		}
+	}
+#endif
+
 	if (m_bFirstPerson)
 	{
-#if defined(__vita__)
-		/* Apply the first-person view mode for the local player when it first
-		   takes effect.  SetViewMode(false) is what issues DrawCharacter(0,0),
-		   i.e. "stop drawing the player's body", and it is otherwise only
-		   reached from a save-game restore or a manual view toggle -- never on
-		   a level started fresh.  So the camera sat in first person while the
-		   full body was still drawn around it, which is why you could see the
-		   inside of the character's head.  Applied on transition, not per
-		   frame; DrawCharacter is not free. */
-		if (IsMyPlayer())
-		{
-			static bool s_bFirstPersonApplied = false;
-			if (!s_bFirstPersonApplied)
-			{
-				s_bFirstPersonApplied = true;
-				SetViewMode(false);
-			}
-		}
-#endif
 		m_pEntity->SetRegisterInSectors(false);
 		UpdateFirstPersonView();
 	}

@@ -396,6 +396,19 @@ void CMovieSystem::StopSequence( IAnimSequence *seq )
 	{
 		if (it->sequence == seq)
 		{
+#if defined(__vita__)
+			/* Where a cut scene ends is the whole question: reaching the end of
+			   its own range is the sequence finishing normally, while stopping
+			   far short of it means something else ended it (a script, a level
+			   reset, or the player). */
+			if (m_system && m_system->GetILog())
+			{
+				Range r = seq->GetTimeRange();
+				m_system->GetILog()->LogToFile("\001[VITA][MOVIE] stopping '%s' at t=%.2f of [%.2f..%.2f] -- %s",
+					seq->GetName(), it->time, r.start, r.end,
+					(it->time >= r.end - 0.05f) ? "ran to its end" : "ended early by something else");
+			}
+#endif
 			m_playingSequences.erase( it );
 
 			if (m_bLastFrameAnimateOnStop)
