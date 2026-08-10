@@ -15,6 +15,9 @@
 #include <CREScreenProcess.h>
 #include <CRETerrainSector.h>
 #include <CREOcLeaf.h>
+/* For IDeformableRenderMesh::ProcessSkinning -- IShader.h only forward-declares
+   the interface, and the render pipeline is what drives character skinning. */
+#include <ICryAnimation.h>
 #endif
 
 CVitaRenderer *gcpVitaRenderer = NULL;
@@ -2835,9 +2838,23 @@ void CVitaRenderer::EF_StartEf()
 	   index passed 32767 and no longer fit CCObject's short m_NumWFX.
 	   SetUse only lowers the count, so the reserved capacity survives and no
 	   reallocation happens on the following frame.  Index 0 stays reserved as
-	   the "no wave" sentinel that a zero m_NumWFX means. */
-	if (CCObject::m_Waves.Num() > 1)
-		CCObject::m_Waves.SetUse(1);
+	   the "no wave" sentinel that a zero m_NumWFX means.
+
+	   Once per frame, not once per call.  EF_StartEf runs several times a frame
+	   here -- the main pass, shadows, and the UI each start their own -- and the
+	   desktop reset is guarded by "if (!SRendItem::m_RecurseLevel)" for exactly
+	   that reason.  Resetting on every call reclaimed slots that objects earlier
+	   in the same frame had already recorded indices into, so their wave lookups
+	   landed on whatever occupied those slots afterwards: water and vegetation
+	   stopped waving correctly.  Keying off the frame id reproduces the
+	   outermost-call-only behaviour without needing a recursion counter. */
+	static int s_nLastWaveResetFrame = -1;
+	if (m_nFrameId != s_nLastWaveResetFrame)
+	{
+		s_nLastWaveResetFrame = m_nFrameId;
+		if (CCObject::m_Waves.Num() > 1)
+			CCObject::m_Waves.SetUse(1);
+	}
 }
 CCObject * CVitaRenderer::EF_GetObject(bool bTemp, int num)
 {
@@ -3035,6 +3052,29 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 
 		if (!leaf || !chunk || !leaf->m_pVertexBuffer || chunk->nNumIndices <= 0)
 			return;
+
+		/* Skin the character before drawing it.  Animating a character updates
+		   its bones, but nothing applies those bones to the vertices until
+		   somebody calls ProcessSkinning -- and in this engine that somebody is
+		   the renderer, not the animation system (CryModelState.h says as much:
+		   the model matrix is "passed to the character in ProcessSkinning() by
+		   the renderer from EF_ObjectChange()").  All three shipping backends do
+		   it from their render pipeline; this one never did, so every character
+		   drew from its unmodified bind-pose vertex buffer no matter how well
+		   the animation underneath was running.  That is the T-pose: animation
+		   layers active, bone-driven bounding box changing shape every frame,
+		   and a mesh that never moved.
+
+		   Matches the D3D9 call, including forcing the update when the vertex
+		   container was already rebuilt this frame. */
+		if (obj && obj->m_pCharInstance)
+		{
+			CLeafBuffer *pVertexContainer = leaf->GetVertexContainer();
+			const bool bForceUpdate = pVertexContainer &&
+				pVertexContainer->m_UpdateFrame == (unsigned)GetFrameID(true);
+			obj->m_pCharInstance->ProcessSkinning(obj->m_Matrix.GetTranslationOLD(),
+				obj->m_Matrix, obj->m_nTemplId, obj->m_nLod, bForceUpdate);
+		}
 
 		const char *vitaShaderName = (ef && ef->GetName()) ? ef->GetName() : "";
 		// Collision-only proxy: has no texture, so drawing it painted white.
