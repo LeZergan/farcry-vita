@@ -38,7 +38,7 @@ CUIVideoPanel::CUIVideoPanel()
 #endif
 	m_bLooping(1), m_bPlaying(0), m_bPaused(0), m_iTextureID(-1), m_pSwapBuffer(0), m_szVideoFile(""), m_bKeepAspect(1)
 #if defined(__vita__)
-	, m_nVitaWidth(0), m_nVitaHeight(0), m_nVitaNumFrames(0), m_fVitaFrameRate(30.0f), m_fVitaNextFrameTime(0.0f)
+	, m_nVitaWidth(0), m_nVitaHeight(0), m_nVitaNumFrames(0), m_fVitaFrameRate(30.0f), m_fVitaNextFrameTime(0.0f), m_bVitaFinishPending(false)
 #endif
 {
 	m_DivX_Active=0;
@@ -362,6 +362,7 @@ int CUIVideoPanel::LoadVideo(const string &szFileName, bool bSound)
 		}
 		m_bPlaying = 0;
 		m_bPaused = 0;
+		m_bVitaFinishPending = true;
 		return 0;
 	}
 
@@ -442,6 +443,21 @@ LRESULT CUIVideoPanel::Update(unsigned int iMessage, WPARAM wParam, LPARAM lPara
 #if defined(__vita__)
 	if ((iMessage == UIM_DRAW) && (wParam == 0))
 	{
+		/* A video that could not be opened has to finish, not hang.  The panel
+		   exists to cover the screen while it plays, so if it just sits there
+		   the game shows an empty panel and never advances past it -- which is
+		   the blank screen after the level's assets flash through.  OnFinished
+		   cannot be called from LoadVideo itself (BackScreen.OnError calls
+		   OnFinished, which calls LoadVideo again, and Lua's stack overflows
+		   during menu creation), so it is deferred to here, one frame later,
+		   where that recursion cannot form. */
+		if (m_bVitaFinishPending)
+		{
+			m_bVitaFinishPending = false;
+			Stop();
+			OnFinished();
+			return CUISystem::DefaultUpdate(this, iMessage, wParam, lParam);
+		}
 		if (m_bPlaying && !m_bPaused && m_VitaBink.isValid)
 		{
 			if (!VitaAdvanceFrame())

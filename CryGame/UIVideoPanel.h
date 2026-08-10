@@ -106,6 +106,10 @@ public:
 	int						m_nVitaNumFrames;
 	float					m_fVitaFrameRate;
 	float					m_fVitaNextFrameTime;	//!< when the next frame is due, in seconds
+	//! Set when a video fails to open: OnFinished is fired one frame later, in
+	//! Update, where the LoadVideo -> OnError -> OnFinished -> LoadVideo
+	//! recursion that overflows Lua's stack cannot form.
+	bool					m_bVitaFinishPending;
 	bool					VitaAdvanceFrame();		//!< decodes/uploads a frame, false at end of video
 #endif
 	bool					m_bPaused;
