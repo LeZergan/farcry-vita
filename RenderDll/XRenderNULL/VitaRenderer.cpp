@@ -1554,8 +1554,18 @@ void CVitaRenderer::Draw2dImage(float xpos, float ypos, float w, float h, int te
 	glPushMatrix();
 	glLoadIdentity();
 	glDisable(GL_DEPTH_TEST);
-	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	/* Honour a blend mode the caller already selected.  Script-driven HUD
+	   drawing goes through CScriptObjectSystem::DrawImageColorCoords, which
+	   calls SetState() with the requested blend and only then calls in here --
+	   so overwriting it with src-alpha unconditionally threw that choice away.
+	   Additive HUD elements are authored on a black backing, so drawn
+	   alpha-blended they show the backing: black boxes behind HUD art.
+	   Only impose the default when the caller left blending switched off. */
+	if (!wasBlend)
+	{
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	}
 
 	bool bTextured = texture_id > 0;
 	if (bTextured)
