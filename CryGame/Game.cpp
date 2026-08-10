@@ -82,9 +82,18 @@ extern "C" void Vita_SetUICursorActive(int active);
 
 static void VitaLevelLoadTrace(const char *step)
 {
-	FILE *trace = fopen("ux0:data/farcry_level_load_trace.txt", "ab");
+	/* One run per file.  Appending forever made this actively misleading: the
+	   file accumulates every level load the console has ever done, so a handful
+	   of loads across a dozen sessions reads exactly like one session reloading
+	   the level over and over -- which is a completely different bug from the
+	   one that is actually there.  Truncate on the first write of each run so
+	   what the file shows is what this run did. */
+	static bool s_bTruncatedThisRun = false;
+	FILE *trace = fopen("ux0:data/farcry_level_load_trace.txt",
+		s_bTruncatedThisRun ? "ab" : "wb");
 	if (trace)
 	{
+		s_bTruncatedThisRun = true;
 		fprintf(trace, "%s\n", step);
 		fclose(trace);
 	}
