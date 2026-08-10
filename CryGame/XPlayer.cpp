@@ -894,17 +894,25 @@ void CPlayer::Update()
 	/* m_pEntity guarded: SetViewMode goes straight to m_pEntity->DrawCharacter,
 	   and this runs at the very top of the update, earlier than the original
 	   view-mode calls ever did. */
-	if (bMyPlayer && !m_pVehicle && m_pEntity)
+	if (bMyPlayer && !m_pVehicle && m_pEntity && !m_bFirstPerson)
 	{
-		static const CPlayer *s_pLastForcedFirstPerson = NULL;
-		if (s_pLastForcedFirstPerson != this)
+		/* Re-asserted whenever it comes back false, not once.  A single
+		   application does not hold: CXGame::SetViewMode calls
+		   DrawCharacter(0, ETY_DRAW_NORMAL) and flips the flag back, and the
+		   player script can select third person at spawn -- after which a
+		   one-shot never fires again and the camera sits at zero distance
+		   inside the character, looking at the back of his own head.  Only the
+		   transition costs anything: once first person holds, this test is a
+		   single bool check and nothing is re-issued.  Vehicles are excluded so
+		   their third-person camera still works. */
+		m_bFirstPerson = true;
+		SetViewMode(false);
+		static bool s_bReportedFirstPerson = false;
+		if (!s_bReportedFirstPerson && m_pGame && m_pGame->m_pSystem && m_pGame->m_pSystem->GetILog())
 		{
-			s_pLastForcedFirstPerson = this;
-			m_bFirstPerson = true;
-			SetViewMode(false);
-			if (m_pGame && m_pGame->m_pSystem && m_pGame->m_pSystem->GetILog())
-				m_pGame->m_pSystem->GetILog()->LogToFile(
-					"\001[VITA][VIEW] local player forced to first person; body hidden");
+			s_bReportedFirstPerson = true;
+			m_pGame->m_pSystem->GetILog()->LogToFile(
+				"\001[VITA][VIEW] local player forced to first person; body hidden");
 		}
 	}
 #endif
