@@ -208,6 +208,12 @@ int __cdecl CTerrain__Cmp_CStatObjInstForLoading_Size(const void* v1, const void
 	CStatObj * pStatObj1 = (p1->GetID()<lstStaticTypes.Count()) ? lstStaticTypes[p1->GetID()].GetStatObj() : 0;
 	CStatObj * pStatObj2 = (p2->GetID()<lstStaticTypes.Count()) ? lstStaticTypes[p2->GetID()].GetStatObj() : 0;
 
+	// qsort requires a strict weak ordering.  The original comparator
+	// returned +1 in both directions when both object ids were unresolved;
+	// newlib's ARM qsort can then spin forever.  Invalid entries sort last
+	// and compare equal to one another.
+	if(!pStatObj1 && !pStatObj2)
+		return 0;
 	if(!pStatObj1)
 		return 1;
 	if(!pStatObj2)
@@ -278,6 +284,15 @@ void CTerrain::LoadStatObjInstances()
 
   GetLog()->Log("Loading static object positions ...");
 
+#if defined(LINUX)
+	SceKernelFreeMemorySizeInfo vitaMemBefore;
+	memset(&vitaMemBefore, 0, sizeof(vitaMemBefore));
+	vitaMemBefore.size = sizeof(vitaMemBefore);
+	if (sceKernelGetFreeMemorySize(&vitaMemBefore) >= 0)
+		sceClibPrintf("[VITAMEM] statobj begin user=%d cdram=%d phycont=%d\n",
+			vitaMemBefore.size_user, vitaMemBefore.size_cdram, vitaMemBefore.size_phycont);
+#endif
+
 	//  RemoveAllStaticObjects();
   for( int x=0; x<CTerrain::GetSectorsTableSize(); x++)
     for( int y=0; y<CTerrain::GetSectorsTableSize(); y++)
@@ -287,13 +302,25 @@ void CTerrain::LoadStatObjInstances()
   list2<CStatObjInstForLoading> static_objects;
   static_objects.Load(GetLevelFilePath("objects.lst"), GetSystem()->GetIPak());
 
+#if defined(LINUX)
+	sceClibPrintf("[BOOTTRACE] LoadStatObjInstances: objects.lst count=%d, before qsort\n", static_objects.Count());
+#endif
+
 	qsort(static_objects.GetElements(), static_objects.Count(), 
 		sizeof(static_objects[0]), CTerrain__Cmp_CStatObjInstForLoading_Size);
+
+#if defined(LINUX)
+	sceClibPrintf("[BOOTTRACE] LoadStatObjInstances: qsort complete\n");
+#endif
 
   // put objects into sectors depending on object position and fill lstUsedCGFs
 	list2<CStatObj*> lstUsedCGFs;
   for(int i=0; i<static_objects.Count(); i++)
   {
+#if defined(LINUX)
+		if ((i & 1023) == 0)
+			sceClibPrintf("[BOOTTRACE] LoadStatObjInstances: creating %d/%d\n", i, static_objects.Count());
+#endif
     float x       = static_objects[i].GetX();
     float y       = static_objects[i].GetY();
     float z       = static_objects[i].GetZ()>0 ? static_objects[i].GetZ() : GetZApr(x,y);
@@ -339,6 +366,15 @@ void CTerrain::LoadStatObjInstances()
 	}
 
   GetLog()->LogPlus(" %d objects created, %d groups released", static_objects.Count(), nGroupsReleased);
+
+#if defined(LINUX)
+	SceKernelFreeMemorySizeInfo vitaMemAfter;
+	memset(&vitaMemAfter, 0, sizeof(vitaMemAfter));
+	vitaMemAfter.size = sizeof(vitaMemAfter);
+	if (sceKernelGetFreeMemorySize(&vitaMemAfter) >= 0)
+		sceClibPrintf("[VITAMEM] statobj end user=%d cdram=%d phycont=%d\n",
+			vitaMemAfter.size_user, vitaMemAfter.size_cdram, vitaMemAfter.size_phycont);
+#endif
 }
 
 // returns file path for current level

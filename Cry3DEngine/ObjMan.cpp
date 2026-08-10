@@ -235,11 +235,15 @@ bool CObjManager::LoadStaticObjectsFromXML()
 					if(pRecvShadow)
 						siGroup.bRecvShadow						= atof(pRecvShadow->getText()) != 0;
 					if(pFileName)
-						siGroup.pStatObj							= MakeObject(pFileName->getText(), NULL, 
+					{
+						siGroup.pStatObj							= MakeObject(pFileName->getText(), NULL,
             evs_ShareAndSortForCache, true, false, false );
+					}
 
 					if(siGroup.pStatObj)
+					{
 						siGroup.pStatObj->CheckValidVegetation();
+					}
 
 					if(siGroup.pStatObj && siGroup.pStatObj->GetLeafBuffer() && siGroup.pStatObj->GetLeafBuffer()->m_pMats && siGroup.pStatObj->GetLeafBuffer()->m_pMats->Count()>4)
 						GetLog()->Log("Warning: Number of materials in distributed object is %d", 
@@ -267,15 +271,22 @@ bool CObjManager::LoadStaticObjectsFromXML()
 						siGroup.bCalcLighting         = atof(pCalcLighting->getText()) != 0;
 					if(pUseSprites)
 						siGroup.bUseSprites           = atof(pUseSprites->getText()) != 0;
+					#ifdef __vita__
+					// Vita renders vegetation geometry directly. Runtime impostor baking is
+					// a desktop render-to-texture feature and is intentionally disabled.
+					siGroup.bUseSprites = false;
+					#endif
 					if(pFadeSize)
 						siGroup.bFadeSize							= atof(pFadeSize->getText()) != 0;
 					if(pUpdateShadowEveryFrame)
 						siGroup.bUpdateShadowEveryFrame = atof(pUpdateShadowEveryFrame->getText()) != 0;
 
-					if(siGroup.pStatObj->GetLeafBuffer() && !((CStatObj*)siGroup.pStatObj)->IsSpritesCreated() && !GetSystem()->IsDedicated())
+					if(siGroup.pStatObj && siGroup.pStatObj->GetLeafBuffer() &&
+						!((CStatObj*)siGroup.pStatObj)->IsSpritesCreated() && !GetSystem()->IsDedicated())
 						((CStatObj*)siGroup.pStatObj)->UpdateCustomLightingSpritesAndShadowMaps(m_vOutdoorAmbientColor, siGroup.nSpriteTexRes, siGroup.fBackSideLevel, siGroup.bCalcLighting );
 
-					((CStatObj*)siGroup.pStatObj)->FreeTriData(); // source geometry is needed only for stencil shadows
+					if(siGroup.pStatObj)
+						((CStatObj*)siGroup.pStatObj)->FreeTriData(); // source geometry is needed only for stencil shadows
 
 					Get3DEngine()->SetStatInstGroup(nGroupId, siGroup);
 					nGroupId++;
@@ -473,7 +484,7 @@ CStatObj * CObjManager::MakeObject(const char * __szFileName,
 		return m_pDefaultCGF;
   }
 
-  // now try to load lods
+	// now try to load lods
 	pObject->LoadLowLODs(eVertsSharing,bLoadAdditinalInfo,bKeepInLocalSpace,bLoadLater);
 
 //  if(!bLoadLater && bGenSpritesAndShadowMap)
@@ -481,6 +492,24 @@ CStatObj * CObjManager::MakeObject(const char * __szFileName,
 
 	pObject->RegisterUser();
   m_lstLoadedObjects.insert(pObject);
+
+#if defined(__vita__)
+	/* Sparse load-time telemetry: newlib reserves the process heap up front,
+	   so sceKernelGetFreeMemorySize alone cannot reveal exhaustion inside
+	   that arena.  mallinfo reports the allocator's real in-use/free bytes. */
+	static unsigned int s_nVitaNewObjects = 0;
+	if ((++s_nVitaNewObjects & 31u) == 0u)
+	{
+		struct mallinfo heapInfo = mallinfo();
+		SceKernelFreeMemorySizeInfo freeInfo;
+		memset(&freeInfo, 0, sizeof(freeInfo));
+		freeInfo.size = sizeof(freeInfo);
+		sceKernelGetFreeMemorySize(&freeInfo);
+		GetLog()->Log("[VITAMEM] objects=%u heapUsed=%d heapFree=%d arena=%d userFree=%d cdramFree=%d phyFree=%d",
+			s_nVitaNewObjects, heapInfo.uordblks, heapInfo.fordblks, heapInfo.arena,
+			freeInfo.size_user, freeInfo.size_cdram, freeInfo.size_phycont);
+	}
+#endif
 
 	return pObject;
 }

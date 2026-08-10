@@ -36,7 +36,11 @@ typedef void *EVENT_HANDLE;
 
 #if defined(LINUX)
 #undef assert
+#if defined(VITA_DEBUG_AUTOLOAD_TRAINING)
+#define assert(exp) (void)( (exp) || (printf("Assert: %s:%d: ' %s ' has failed\n", __FILE__, __LINE__, #exp), 0) )
+#else
 #define assert(exp) (void)( (exp) || (printf("Assert: ' %s ' has failed\n", #exp), 0) )
+#endif
 
 	#include <stdlib.h> 
 	#include <time.h>
@@ -265,6 +269,25 @@ static int64 GetTicks()
 #if defined(LINUX)
 	#define RC_EXECUTABLE "rc"
 	#include <WinBase.h>
+
+	/* The port is instrumented with sceClibPrintf tracing throughout.  Every
+	   call goes out over the kernel debug channel, which is nearly free under
+	   emulation but expensive on real hardware -- the per-object file-search
+	   traces alone run to several thousand calls during a single level load,
+	   and the per-draw renderer traces fire thousands of times a second.
+	   Compile them out unless FARCRY_VITA_TRACE is defined; boot progress is
+	   recorded in boot_marker.txt and Log.txt, which are not affected.
+
+	   clib.h is included first on purpose: the real declaration has to be seen
+	   before the name is turned into a macro, and its include guard keeps any
+	   later include of it harmless. */
+	#include <psp2/kernel/clib.h>
+	/* The Vita build force-includes engine_port/compat/CryCompat.h, which
+	   already does this; the guard keeps the two from colliding for any build
+	   that reaches platform.h by another route. */
+	#if !defined(FARCRY_VITA_TRACE) && !defined(sceClibPrintf)
+		#define sceClibPrintf(...) ((void)0)
+	#endif
 #endif
 
 #endif // _PLATFORM_H_

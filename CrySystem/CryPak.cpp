@@ -211,10 +211,30 @@ const char* CCryPak::AdjustFileName(const char *src, char *dst, unsigned nFlags,
 	char szNewSrc[g_nMaxPath];
 	strcpy(szNewSrc, src);
 	BeautifyPath(szNewSrc);
-	if (!_fullpath (dst, szNewSrc, g_nMaxPath))
+	/* Retail animation aliases commonly concatenate a directory with ".\\",
+	   for example Objects\\Weapons\\M4\\.\\M4_idle11.caf. Windows accepts that
+	   spelling, but ZIP entry names do not contain dot path components. Remove
+	   them before both loose-file and PAK lookup; this is lexical normalization
+	   only and cannot escape the requested directory. */
+	char dotSegment[4] = { g_cNativeSlash, '.', g_cNativeSlash, 0 };
+	char *dot = NULL;
+	while ((dot = strstr(szNewSrc, dotSegment)) != NULL)
+		memmove(dot, dot + 2, strlen(dot + 2) + 1);
+	// Vita assets normally live inside PAKs, so POSIX realpath() cannot
+	// resolve them as loose host files.  Use CryPak's existing normalized
+	// relative-path fallback directly; this preserves ZIP entry lookup and
+	// avoids a failed filesystem syscall plus an error-log write per asset.
+#if defined(__vita__)
+	const bool bUseRelativePath = true;
+#else
+	const bool bUseRelativePath = !_fullpath(dst, szNewSrc, g_nMaxPath);
+#endif
+	if (bUseRelativePath)
 	{
 		src = szNewSrc;
+#if !defined(__vita__)
 		m_pLog->LogError("\002Cannot transform file name %s to absolute path, resorting to desparate measures!", src);
+#endif
 		if (src[0] == '.' && (src[1] == g_cNativeSlash || src[1] == g_cNonNativeSlash))
 			src+=2;
 #ifdef _XBOX

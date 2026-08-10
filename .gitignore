@@ -9,4 +9,29 @@
 /vita_bringup/build_ninja/
 /vita_bringup/*.vpk
 /vita_bringup/*.self
+/engine_port/build/
 *.o
+
+# Additional build trees (the committed one is engine_port/CMakeLists.txt; these
+# are per-session working directories, all regenerable)
+/engine_port/build_autotest/
+/engine_port/build_codex/
+/engine_port/build_ninja/
+*.obj
+
+# Captured run output: logs, core dumps and screenshots from device sessions.
+# Useful while debugging, not source.
+/engine_port/artifacts/
+
+# Staging copy of the retail game data for deployment to the device -- the same
+# copyrighted level/texture/script content already excluded as "farcry data".
+/engine_port/vita_kit/ux0_data/
+# Packaged deployment output -- rebuilt from the sources above.
+/engine_port/vita_kit/*.vpk
+/engine_port/vita_kit/eboot.bin
+
+# Vendored LGPL Bink decoder -- it carries its own .git, so staging it here
+# would create a gitlink with no submodule URL behind it.  Left out rather than
+# stripping someone else's repository; register it as a real submodule if this
+# needs to travel with the tree.
+/third_party/libbinkdec/

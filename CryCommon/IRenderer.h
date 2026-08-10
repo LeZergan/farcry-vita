@@ -292,6 +292,10 @@ template	<class T> class list2;
 #define GS_BLSRC_DSTALPHA          0x7
 #define GS_BLSRC_ONEMINUSDSTALPHA  0x8
 #define GS_BLSRC_ALPHASATURATE     0x9
+/* OpenGL/vitaGL support GL_SRC_COLOR as a source blend factor.  The original
+   D3D-centric state enum omitted it even though the public script API exposes
+   SRC_COLOR blend modes; reserve the next source nibble for that exact mode. */
+#define GS_BLSRC_SRCCOL             0xa
 
 #define GS_BLDST_MASK              0xf0
 #define GS_BLDST_ZERO              0x10
@@ -459,12 +463,27 @@ struct SVertexStream
   bool m_bDynamic;
   int m_nBufOffset;
   struct SVertPool *m_pPool;
+#if defined(LINUX)
+  /* Vita: GL element-array object holding this index stream, so a draw does
+     not have to hand vitaGL a client-side pointer (which makes it copy the
+     indices into GPU memory again on every single call).  0 means "not
+     uploaded, use the client pointer". Deliberately not touched by Reset(),
+     which runs on live streams. */
+  unsigned int m_nGLIBO;
+  int          m_nGLIBOItems;
+  bool         m_bGLDirty;
+#endif
   SVertexStream()
   {
     Reset();
     m_bDynamic = false;
     m_nBufOffset = 0;
     m_pPool = NULL;
+#if defined(LINUX)
+    m_nGLIBO = 0;
+    m_nGLIBOItems = 0;
+    m_bGLDirty = true;
+#endif
   }
 
   void Reset()
@@ -491,6 +510,11 @@ public:
     m_bFenceSet=0;
     m_NumVerts = 0;
     m_vertexformat = 0;
+#if defined(LINUX)
+    m_nGLVBO = 0;
+    m_nGLVBOVerts = 0;
+    m_bGLDirty = true;
+#endif
   }
   
   CVertexBuffer(void* pData, int nVertexFormat, int nVertCount=0)
@@ -506,6 +530,11 @@ public:
 	  m_fence=0;
 	  m_bFenceSet=0;
     m_NumVerts = nVertCount;
+#if defined(LINUX)
+    m_nGLVBO = 0;
+    m_nGLVBOVerts = 0;
+    m_bGLDirty = true;
+#endif
   }
   void *GetStream(int nStream, int *nOffs);
 
@@ -516,6 +545,14 @@ public:
 	int		m_vertexformat;
 	unsigned int m_fence;
   int   m_NumVerts;
+#if defined(LINUX)
+  /* Vita: GL array-buffer object holding this vertex data -- see the matching
+     comment on SVertexStream.  Static level geometry is uploaded once and then
+     drawn straight out of GPU memory. 0 means "use the client pointer". */
+  unsigned int m_nGLVBO;
+  int          m_nGLVBOVerts;
+  bool         m_bGLDirty;
+#endif
 //## MM unused?	void *pPS2Buffer;
 
   int Size(int Flags, int nVerts);

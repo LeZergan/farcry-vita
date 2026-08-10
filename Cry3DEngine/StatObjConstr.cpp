@@ -361,6 +361,23 @@ void CStatObj::UpdateCustomLightingSpritesAndShadowMaps(Vec3d vStatObjAmbientCol
   m_bCalcLighting = bCalcLighting;
   Vec3d vLight = GetSystem()->GetI3DEngine()->GetSunPosition();
   vLight.Normalize();
+
+#ifdef __vita__
+  // Far Cry's desktop path bakes eight impostor textures plus shadow maps for
+  // every vegetation type by rendering the model during level load.  VitaGL's
+  // fixed port does not expose the required render-to-texture pipeline and the
+  // generated textures consume too much of Vita's shared 512 MiB budget.
+  // Keep the inexpensive per-vertex lighting pass; Vita vegetation is marked
+  // mesh-only by ObjMan and therefore never samples missing impostors.
+  if(m_pLeafBuffer)
+    m_pLeafBuffer->UpdateCustomLighting(m_fBackSideLevel, vStatObjAmbientColor, vLight, bCalcLighting);
+
+  for(int nLodLevel=1; nLodLevel<MAX_STATOBJ_LODS_NUM; ++nLodLevel)
+    if(m_arrpLowLODs[nLodLevel] && m_arrpLowLODs[nLodLevel]->GetLeafBuffer())
+      m_arrpLowLODs[nLodLevel]->GetLeafBuffer()->UpdateCustomLighting(
+        m_fBackSideLevel, vStatObjAmbientColor, vLight, bCalcLighting);
+  return;
+#endif
 //  Vec3d vColor = GetSystem()->GetI3DEngine()->GetWorldColor();
   float fSize = m_vBoxMax.z - m_vBoxMin.z;
 

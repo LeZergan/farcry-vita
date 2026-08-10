@@ -127,7 +127,7 @@ bool CStatObj::LoadUncompiled(const char * szFileName,
 											 bool bKeepInLocalSpace,
 											 bool bLoadLater,
 											 bool bMakePhysics)
-{ 
+{
 	if(!szFileName[0]) 
 	GetSystem()->Error("CStatObj::LoadUncompiled: szFileName not specified");
 

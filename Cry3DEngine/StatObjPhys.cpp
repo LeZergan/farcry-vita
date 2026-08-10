@@ -121,6 +121,16 @@ void CStatObj::Physicalize()
 		{ assert(nOcclMatID<0); nOcclMatID = m; }
 	}
 
+#if defined(VITA_DEBUG_PHYSICALIZE)
+	// Note the \001 prefix: CLog::CheckAgainstVerbosity treats an unprefixed
+	// message as the most detailed level and drops it at the default file
+	// verbosity, so a plain string never reaches Log.txt during level load.
+	GetLog()->UpdateLoadingScreen("\001[VITA PHYS] %s: faces=%d mats=%d enum=%p physMat=%d obstruct=%d leaves=%d occl=%d",
+		GetFileName(), m_pTriData->m_nFaceCount, m_pTriData->m_lstMatTable.Count(),
+		(void*)pPhysMaterialEnumerator, nPhysMatID, arrObstrMatIDs.Count(),
+		arrLeavesMatIDs.Count(), nOcclMatID);
+#endif
+
 #define MESH_PHYSIC 0
 #define MESH_OBSTRUCT 1
 #define MESH_LEAVES 2
@@ -281,10 +291,28 @@ void CStatObj::Physicalize()
 				if (lstPhysIndices.Count()<600 && max(max(sz.x,sz.y),sz.z)>6) // make more dense OBBs for large (wrt terrain grid) objects
 					nMinTrisPerNode = nMaxTrisPerNode = 1;
 				assert(nMesh<MAX_PHYS_GEOMS_IN_CGF);
-			  m_arrPhysGeomInfo[nMesh] = pGeoman->RegisterGeometry(pGeoman->CreateMesh((vectorf*)&pExVerts[0], &lstPhysIndices[0], 
-					(short*)&lstFaceMaterials[0], lstPhysIndices.Count()/3, flags, true, true, tol, nMinTrisPerNode,nMaxTrisPerNode, 2.5f));
-				if (lstFaceMaterials.Count()>0)
-					m_arrPhysGeomInfo[nMesh]->surface_idx = lstFaceMaterials[0];
+				// CGeomManager::CreateMesh has real early-out paths that return NULL
+				// (degenerate triangle count), while RegisterGeometry dereferences its
+				// argument unconditionally -- a genuine null write in the original code
+				// that only shows up on meshes the PC build happened never to feed it.
+				IGeometry *pPhysMesh = pGeoman->CreateMesh((vectorf*)&pExVerts[0], &lstPhysIndices[0],
+					(short*)&lstFaceMaterials[0], lstPhysIndices.Count()/3, flags, true, true, tol,
+					nMinTrisPerNode,nMaxTrisPerNode, 2.5f);
+				if(pPhysMesh)
+				{
+					m_arrPhysGeomInfo[nMesh] = pGeoman->RegisterGeometry(pPhysMesh);
+					if (lstFaceMaterials.Count()>0 && m_arrPhysGeomInfo[nMesh])
+						m_arrPhysGeomInfo[nMesh]->surface_idx = lstFaceMaterials[0];
+#if defined(VITA_DEBUG_PHYSICALIZE)
+					// Logged through ILog rather than sceClibPrintf so it lands in the
+					// game's own Log.txt next to the level-load timings; the guest's
+					// stdout is not captured when Vita3K runs with -r.
+					static int s_nRegistered = 0;
+					if((++s_nRegistered % 250) == 1)
+						GetLog()->UpdateLoadingScreen("\001[VITA PHYS] %d collision meshes registered (latest %s, mesh %d, %d tris)",
+							s_nRegistered, GetFileName(), nMesh, lstPhysIndices.Count()/3);
+#endif
+				}
       }
 
       if(nOcclMatID>=0 && nMesh==MESH_OCCLUSION)

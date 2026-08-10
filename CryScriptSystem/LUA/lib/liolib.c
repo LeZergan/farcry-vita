@@ -44,12 +44,12 @@
 /* FILE *popen();
 int pclose(); */
 //#define CLOSEFILE(L, f)    ((pclose(f) == -1) ? fclose(f) : 0)
-#define CLOSEFILE(L, f)    ((pclose(f) == -1) ? CryPakClose(f) : 0)
+#define CLOSEFILE(L, f)    ((pclose(f) == -1) ? LuaCryPakClose(f) : 0)
 #else
 /* no support for popen */
 #define popen(x,y) NULL  /* that is, popen always fails */
 //#define CLOSEFILE(L, f)    (fclose(f))
-#define CLOSEFILE(L, f)    (CryPakClose(f))
+#define CLOSEFILE(L, f)    (LuaCryPakClose(f))
 #endif
 
 
@@ -174,7 +174,7 @@ static int file_collect (lua_State *L) {
 
 
 static int io_open (lua_State *L) {
-  FILE *f = CryPakOpen(luaL_check_string(L, 1), luaL_check_string(L, 2));
+  FILE *f = LuaCryPakOpen(luaL_check_string(L, 1), luaL_check_string(L, 2));
   return setnewfile(L, f, NOFILE);
 }
 
@@ -198,7 +198,7 @@ static int io_fromto (lua_State *L, int inout, const l_char *mode) {
   }
   else {
     const l_char *s = luaL_check_string(L, 1);
-    current = (*s == l_c('|')) ? popen(s+1, mode) : CryPakOpen(s, mode);
+    current = (*s == l_c('|')) ? popen(s+1, mode) : LuaCryPakOpen(s, mode);
     return setnewfile(L, current, inout);
   }
 }
@@ -260,7 +260,7 @@ static int read_until (lua_State *L, FILE *f, const l_char *p, int pl) {
   luaL_buffinit(L, &b);
   prep_read_until(next, p, pl);
   j = 0;
-  while ((c = CryPakGetc(f)) != EOF) {
+  while ((c = LuaCryPakGetc(f)) != EOF) {
   NoRead:
     if (c == p[j]) {
       j++;  /* go to next char in pattern */
@@ -286,7 +286,7 @@ static int read_until (lua_State *L, FILE *f, const l_char *p, int pl) {
 
 static int read_number (lua_State *L, FILE *f) {
   double d;
-  if (CryPakFScanf(f, l_s(LUA_NUMBER_SCAN), &d) == 1) {
+  if (LuaCryPakFScanf(f, l_s(LUA_NUMBER_SCAN), &d) == 1) {
     lua_pushnumber(L, d);
     return 1;
   }
@@ -295,8 +295,8 @@ static int read_number (lua_State *L, FILE *f) {
 
 
 static int test_eof (lua_State *L, FILE *f) {
-  l_charint c = CryPakGetc(f);
-  CryPakUngetc(c, f);
+  l_charint c = LuaCryPakGetc(f);
+  LuaCryPakUngetc(c, f);
   lua_pushlstring(L, NULL, 0);
   return (c != EOF);
 }
@@ -311,7 +311,7 @@ static int read_chars (lua_State *L, FILE *f, size_t n) {
   do {
     l_char *p = luaL_prepbuffer(&b);
     if (rlen > n) rlen = n;  /* cannot read more than asked */
-    nr = CryPakFRead(p, sizeof(l_char), rlen, f);
+    nr = LuaCryPakFRead(p, sizeof(l_char), rlen, f);
     luaL_addsize(&b, nr);
     n -= nr;  /* still have to read `n' chars */
   } while (n > 0 && nr == rlen);  /* until end of count or eof */
@@ -388,12 +388,12 @@ static int io_write (lua_State *L) {
     if (lua_rawtag(L, arg) == LUA_TNUMBER) {
       /* optimization: could be done exactly as for strings */
       status = status &&
-          CryPakFPrintf(f, l_s(LUA_NUMBER_FMT), lua_tonumber(L, arg)) > 0;
+          LuaCryPakFPrintf(f, l_s(LUA_NUMBER_FMT), lua_tonumber(L, arg)) > 0;
     }
     else {
       size_t l;
       const l_char *s = luaL_check_lstr(L, arg, &l);
-      status = status && (CryPakFWrite((void*)s, sizeof(l_char), l, f) == l);
+      status = status && (LuaCryPakFWrite((void*)s, sizeof(l_char), l, f) == l);
     }
   }
   pushresult(L, status);
@@ -408,7 +408,7 @@ static int io_seek (lua_State *L) {
   int op = luaL_findstring(luaL_opt_string(L, 2, l_s("cur")), modenames);
   long offset = luaL_opt_long(L, 3, 0);
   luaL_arg_check(L, op != -1, 2, l_s("invalid mode"));
-  op = CryPakFSeek(f, offset, mode[op]);
+  op = LuaCryPakFSeek(f, offset, mode[op]);
   if (op)
     return pushresult(L, 0);  /* error */
   else {
@@ -421,7 +421,7 @@ static int io_seek (lua_State *L) {
 static int io_flush (lua_State *L) {
   FILE *f = (lua_isnull(L, 1)) ? (FILE *)NULL :
                                  (FILE *)luaL_check_userdata(L, 1, FILEHANDLE);
-  return pushresult(L, CryPakFFlush(f) == 0);
+  return pushresult(L, LuaCryPakFFlush(f) == 0);
 }
 
 /* }====================================================== */
@@ -615,8 +615,8 @@ static int io_debug (lua_State *L) {
 #else
   for (;;) {
     l_char buffer[250];
-    CryPakFPrintf(stderr, l_s("lua_debug> "));
-    if (CryPakFGets(buffer, sizeof(buffer), stdin) == 0 ||
+    LuaCryPakFPrintf(stderr, l_s("lua_debug> "));
+    if (LuaCryPakFGets(buffer, sizeof(buffer), stdin) == 0 ||
         strcmp(buffer, l_s("cont\n")) == 0)
       return 0;
     lua_dostring(L, buffer);
@@ -629,6 +629,9 @@ static int io_debug (lua_State *L) {
 #define LEVELS1	12	/* size of the first part of the stack */
 #define LEVELS2	10	/* size of the second part of the stack */
 
+#ifdef __cplusplus
+extern "C"
+#endif
 int errorfb (lua_State *L) {
 #ifdef PS2
       OutputDebugString("Not implemented");
@@ -745,4 +748,3 @@ LUALIB_API int lua_iolibopen (lua_State *L) {
   lua_settagmethod(L, iotag, l_s("gc"));
   return 0;
 }
-

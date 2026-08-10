@@ -40,10 +40,14 @@ void CStatObj::PrepareShadowMaps(const Vec3d & obj_pos, ShadowMapLightSource * p
 
     ShadowMapFrustum * lof = GetRenderer()->MakeShadowMapFrustum(&new_lof, pLSource, obj_pos+GetCenter()/*Vec3d(0,0,GetCenterZ())*/, &so, EST_DEPTH_BUFFER);
 
-		lof->pOwnerGroup = this;
-
+    /* Vita: MakeShadowMapFrustum is a real, documented stub -- shadow-map
+       rendering needs RenderDll/Common's deferred pipeline, out of scope for
+       this port (see VitaRenderer.h) -- so it always returns null here. The
+       original code dereferenced lof a line above this guard; moved the
+       write inside it instead of assuming the renderer always succeeds. */
     if(lof)
     {
+			lof->pOwnerGroup = this;
       pLSource->m_LightFrustums.Add(*lof);
     }
 

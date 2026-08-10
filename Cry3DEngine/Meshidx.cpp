@@ -791,10 +791,16 @@ CIndexedMesh::CIndexedMesh(ISystem * pSystem,
 	for(int i=0; i<m_nFaceCount; i++)
 	{
 		CMatInfo * pMatInfo = &m_lstMatTable[m_pFaces[i].shader_id];
-		IShader * pTemplate = pMatInfo->shaderItem.m_pShader->GetTemplate(-1);
+		// Vita: m_pShader is null here -- IRenderer::EF_LoadShader is a
+		// documented, deliberate stub (the real shader/effect pipeline is
+		// RenderDll/Common's ~57K-line CRenderer base, out of scope -- see
+		// RenderDll/XRenderNULL/VitaRenderer.h). This loop only computes a
+		// shadow-casting flag from the shader/material; skip it without a
+		// real shader instead of dereferencing null, geometry loads either way.
+		IShader * pTemplate = pMatInfo->shaderItem.m_pShader ? pMatInfo->shaderItem.m_pShader->GetTemplate(-1) : NULL;
     SRenderShaderResources *sr = pMatInfo->shaderItem.m_pShaderResources;
 
-		if( pTemplate->GetFlags2() & EF2_NOCASTSHADOWS )
+		if( pTemplate && pTemplate->GetFlags2() & EF2_NOCASTSHADOWS )
 			m_pFaces[i].m_dwFlags |= FLAG_SKIP_SHADOWVOLUME;
 
 		if( pMatInfo->m_Flags & MIF_NOCASTSHADOWS )

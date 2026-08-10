@@ -55,21 +55,7 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 		*m_fValue=(float)(atof(m_sValue));
 		*m_nValue=atoi(m_sValue);
 	}
-#if defined(LINUX)
-	/* Vita: CreateTaggedValue is a guaranteed no-op on the stub script
-	   system (see ScriptStubs.cpp -- always returns 0), but the virtual
-	   call itself hangs/crashes on Vita3K after a handful of identical
-	   prior calls succeed -- same "call boundary" class of Vita3K/dynarmic
-	   quirk as QueryPerformanceFrequency and FileEntryTransactionAdd's
-	   RemoveFile (see engine_port/compat/README.md). Since it's a no-op
-	   either way under the stub, skip the call outright instead of
-	   chasing an apparent emulator-level issue. Also keep tracing minimal
-	   right around this spot -- the boundary appears sensitive to total
-	   code/log volume, not to CreateTaggedValue's own logic. */
-	m_hScriptTag=0;
-#else
 	m_hScriptTag=m_pScriptSystem->CreateTaggedValue(m_sName,m_sValue);
-#endif
 }
 
 
@@ -103,11 +89,7 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 			*m_fValue=(float)(atof(sTempValue));
 			*m_nValue=atoi(sTempValue);
 		}
-#if defined(LINUX)
-		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
-#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(sName,m_sValue);
-#endif
 	break;
 	case CVAR_INT:
 		m_nValue=(int *)pVar;
@@ -117,11 +99,7 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 			m_bLoadedFromScript=true;
 			*m_nValue=atoi(sTempValue);
 		}
-#if defined(LINUX)
-		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
-#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(sName,m_nValue);
-#endif
 		memset(m_sValue,0,VAR_STRING_SIZE);
 	break;
 	case CVAR_FLOAT:
@@ -131,11 +109,7 @@ CXConsoleVariable::CXConsoleVariable(CXConsole *pConsole,IScriptSystem *pSS,cons
 			m_bLoadedFromScript=true;
 			*m_fValue=(float)(atof(sTempValue));
 		}
-#if defined(LINUX)
-		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
-#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(sName,m_fValue);
-#endif
 		memset(m_sValue,0,VAR_STRING_SIZE);
 	break;
 	default:
@@ -151,38 +125,24 @@ void CXConsoleVariable::SetSrc (void* pSrc)
 	if (!pSrc)
 		return;
 
-#if !defined(LINUX)
 	m_pScriptSystem->RemoveTaggedValue(m_hScriptTag);
-#endif
 
 	switch (m_nType)
 	{
 	case CVAR_STRING:
 		strcpy ((char*)pSrc, m_sValue );
 		m_sValue = (char*)pSrc;
-#if defined(LINUX)
-		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
-#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(m_sName,m_sValue);
-#endif
 		break;
 	case CVAR_INT:
 		*(int*)pSrc = *m_nValue;
 		m_nValue = (int*)pSrc;
-#if defined(LINUX)
-		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
-#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(m_sName,m_nValue);
-#endif
 		break;
 	case CVAR_FLOAT:
 		*(float*)pSrc = *m_fValue;
 		m_fValue = (float*)pSrc;
-#if defined(LINUX)
-		m_hScriptTag=0; // Vita: see CreateTaggedValue call-boundary note above
-#else
 		m_hScriptTag=m_pScriptSystem->CreateTaggedValue(m_sName,m_fValue);
-#endif
 		break;
 	}
 

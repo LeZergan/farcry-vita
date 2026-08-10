@@ -267,6 +267,13 @@ void CMovieUser::PlaySubtitles( ISound *pSound )
 		{
 		//	CryLogAlways("PLAYSUBTITLE: Subtitle found: %s",szLabel);
 			// Wait for on play event for this sound, to prevent sound GetLengthMs function to stall execution.
+#if defined(__vita__)
+			// Vita ships without the licensed CrySound backend, so no sound ever
+			// reaches SOUND_EVENT_ON_PLAY and a deferred subtitle would never be
+			// shown at all.  Since GetLengthMs cannot stall on a silent build
+			// either, post it directly and keep cutscene dialogue readable.
+			OnSoundEvent( SOUND_EVENT_ON_PLAY,pSound );
+#else
 			if (pSound->IsLoaded())
 			{
 				// If sound loaded do it directly.
@@ -277,6 +284,7 @@ void CMovieUser::PlaySubtitles( ISound *pSound )
 				// Else wait for sound to call us.
 				pSound->AddEventListener( this );
 			}
+#endif
 		}
 	//	else
 			//CryLogAlways("PLAYSUBTITLE: Subtitle NOT found: %s",pSound->GetName());
@@ -295,10 +303,22 @@ void CMovieUser::OnSoundEvent( ESoundCallbackEvent event,ISound *pSound )
 			char szLabel[2048];
 			if (m_pGame->m_StringTableMgr.GetSubtitleLabel(pSound->GetName(),szLabel))
 			{
-//				CryLogAlways("SOUNDEVENT: Subtitle found: %s",szLabel);   
+//				CryLogAlways("SOUNDEVENT: Subtitle found: %s",szLabel);
 				//m_pGame->GetSystem()->GetILog()->
 				//m_pGame->m_pClient->AddHudMessage(szLabel,(float)(pSound->GetLengthMs())/1000.0f);
-        m_pGame->m_pClient->AddHudSubtitle(szLabel, (float)(pSound->GetLengthMs())/1000.0f);
+				float fLifetime = (float)(pSound->GetLengthMs())/1000.0f;
+				if (fLifetime <= 0.0f)
+				{
+					// The line's own voice sample decides how long the subtitle
+					// stays up.  When the sound system reports no length there is
+					// nothing to sync to, so fall back to a reading-speed estimate
+					// (~15 characters a second) instead of flashing it for zero
+					// seconds, which is what made cutscene dialogue unreadable.
+					fLifetime = 1.5f + (float)strlen(szLabel) / 15.0f;
+					if (fLifetime > 12.0f)
+						fLifetime = 12.0f;
+				}
+				m_pGame->m_pClient->AddHudSubtitle(szLabel, fLifetime);
 			}
 		//	else
 	//			CryLogAlways("SOUNDEVENT:Subtitle NOT found: %s",szLabel);

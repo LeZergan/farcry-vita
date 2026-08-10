@@ -290,14 +290,14 @@ FILE * fxopen(const char *file, const char *mode)
   char name[256];
   _ConvertNameForXBox(name, file);
 	#ifdef USE_CRYPAK
-		return CryPakOpen(name,mode); 
+		return LuaCryPakOpen(name,mode); 
 	#else
 		return (fopen(name,mode));
 	#endif
 	
 #else
 	#ifdef USE_CRYPAK
-		return CryPakOpen(file,mode);  	
+		return LuaCryPakOpen(file,mode);  	
 	#else
 		return (fopen(file,mode));
 	#endif
@@ -308,7 +308,7 @@ FILE * fxopen(const char *file, const char *mode)
 void fxclose(FILE *f)
 {
 #ifdef USE_CRYPAK
-	CryPakClose(f); 
+	LuaCryPakClose(f); 
 #else
 	fclose(f);
 #endif	
@@ -327,7 +327,7 @@ LUA_API int lua_loadfile (lua_State *L, const l_char *filename) {
   FILE *f = (filename == NULL) ? stdin : fxopen(filename, l_s("r"));
 #endif
   if (f == NULL) return LUA_ERRFILE;  /* unable to open file */
-  bin = (CryPakUngetc(CryPakGetc(f), f) == LUA_SIGNATURE[0]);
+  bin = (LuaCryPakUngetc(LuaCryPakGetc(f), f) == LUA_SIGNATURE[0]);
 #ifndef PS2
   if (bin && f != stdin) {    
 		fxclose(f);

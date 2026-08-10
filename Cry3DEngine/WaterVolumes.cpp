@@ -187,17 +187,31 @@ bool CWaterVolume::TesselateFace(list2<struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F> 
   float fDist12 = v1.xyz.GetDistance(v2.xyz);
   float fDist20 = v2.xyz.GetDistance(v0.xyz);
 
-  float fMaxDist = max(max(fDist01,fDist12), fDist20);
+	/* Select the longest edge once and carry its identity through the whole
+	   subdivision.  Recomputing max() and then recovering the source edge by
+	   float equality is not stable on ARM (the printed values can be identical
+	   while the comparison still fails), and strict 'greater than both' tests
+	   also drop isosceles faces. */
+	int nLongestEdge = 0;
+	float fMaxDist = fDist01;
+	if (fDist12 > fMaxDist)
+	{
+		nLongestEdge = 1;
+		fMaxDist = fDist12;
+	}
+	if (fDist20 > fMaxDist)
+	{
+		nLongestEdge = 2;
+		fMaxDist = fDist20;
+	}
 	float fCameraDist=200;
 	
-	if(fMaxDist == fDist01)
+	if(nLongestEdge == 0)
 		fCameraDist = GetSquaredDistance(GetViewCamera().GetPos(), (v0.xyz+v1.xyz)*0.5f);
-	else if(fMaxDist == fDist12)
+	else if(nLongestEdge == 1)
 		fCameraDist = GetSquaredDistance(GetViewCamera().GetPos(), (v1.xyz+v2.xyz)*0.5f);
-	else if(fMaxDist == fDist20)
-		fCameraDist = GetSquaredDistance(GetViewCamera().GetPos(), (v2.xyz+v0.xyz)*0.5f);
 	else
-		assert(0);
+		fCameraDist = GetSquaredDistance(GetViewCamera().GetPos(), (v2.xyz+v0.xyz)*0.5f);
 
 	if(fMaxDist<m_fTriMaxSize)
 	{
@@ -215,7 +229,7 @@ bool CWaterVolume::TesselateFace(list2<struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F> 
   int nNewIndex = lstVerts.Count();
 
   // tesselate longest
-  if(fDist01>fDist12 && fDist01>fDist20)
+  if(nLongestEdge == 0)
   { // 01
 		struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F v01;
     MidVert(v0, v1, v01);
@@ -232,7 +246,7 @@ bool CWaterVolume::TesselateFace(list2<struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F> 
     lstIndices.Add(n1);
   }
   else
-  if(fDist12>fDist01 && fDist12>fDist20)
+  if(nLongestEdge == 1)
   { // 12
     struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F v12;
 		MidVert(v1, v2, v12);
@@ -249,7 +263,7 @@ bool CWaterVolume::TesselateFace(list2<struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F> 
     lstIndices.Add(n2);
   }
   else
-  if(fDist20>fDist12 && fDist20>fDist01)
+  if(nLongestEdge == 2)
   { // 20
     struct_VERTEX_FORMAT_P3F_N_COL4UB_TEX2F v20;
 		MidVert(v2, v0, v20);

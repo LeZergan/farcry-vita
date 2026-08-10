@@ -653,6 +653,16 @@ void C3DEngine::LoadMissionSettingsFromXML(XDOM::IXMLDOMNode *pInputNode, bool b
   m_vDefFogColor[1] = m_vFogColor[1] = vColor[1]/255.f;
   m_vDefFogColor[2] = m_vFogColor[2] = vColor[2]/255.f;
   GetRenderer()->SetClearColor(m_vFogColor);
+#if defined(__vita__)
+  /* The fog colour is also the clear colour for outdoor views, so if this
+     lookup ever falls back to its 255,255,255 default the sky reads as a flat
+     white hole.  Note GetXMLAttribText hands back a shared static buffer, so
+     the parsed floats are logged rather than several of its return values in
+     one call.  The \001 prefix keeps this above the default file verbosity
+     (see CLog::CheckAgainstVerbosity). */
+  GetLog()->UpdateLoadingScreen("\001[VITA ENV] fog colour parsed as %.3f %.3f %.3f",
+    m_vFogColor[0], m_vFogColor[1], m_vFogColor[2]);
+#endif
 
   // fog distance
   m_fDefFogNearDist = m_fFogNearDist= (float)atol(GetXMLAttribText(pInputNode,"Environment","Fog","Start","64"));

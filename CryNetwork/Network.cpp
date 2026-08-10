@@ -699,7 +699,10 @@ void CNetwork::LogNetworkInfo()
 			
 			i = 0;
 
-			while(hp->h_aliases[i]) 
+			// The Vita resolver leaves h_aliases (and sometimes h_addr_list)
+			// null rather than pointing at an empty list, so check the array
+			// itself before walking it.
+			while(hp->h_aliases && hp->h_aliases[i])
 			{
 				CryLogAlways("  alias: %s\n", hp->h_aliases[i]);
 				i++;
@@ -707,11 +710,16 @@ void CNetwork::LogNetworkInfo()
 
 			i = 0;
 
-			while(hp->h_addr_list[i])
+			while(hp->h_addr_list && hp->h_addr_list[i])
 			{
 				sockaddr_in temp;
 
-				memcpy(&(temp.sin_addr), hp->h_addr_list[i], hp->h_length);
+				int nAddrLen = hp->h_length;
+				if (nAddrLen > (int)sizeof(temp.sin_addr))
+					nAddrLen = (int)sizeof(temp.sin_addr);
+				memset(&(temp.sin_addr), 0, sizeof(temp.sin_addr));
+				if (nAddrLen > 0)
+					memcpy(&(temp.sin_addr), hp->h_addr_list[i], nAddrLen);
 
 #if defined(LINUX)
 				const in_addr_windows *pin_addr_win = reinterpret_cast<const in_addr_windows*>(&temp.sin_addr);

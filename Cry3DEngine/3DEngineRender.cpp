@@ -76,7 +76,12 @@ void C3DEngine::Draw()
 	 else
 	 {
 		// bad solution - only to get CryVision working properly
-		if(*((bool*)m_pREScreenProcess->mfGetParameter(SCREENPROCESS_NIGHTVISION, SCREENPROCESS_ACTIVE)))
+		// Vita: m_pREScreenProcess is a documented, permanent null stub (the
+		// full-screen post-process render-element pipeline is out of scope --
+		// see the guards already in 3DEngineScreenEffects.cpp's SetScreenFx/
+		// SetScreenFxParam) -- treat "no screen process" the same as
+		// "night vision not active" instead of a null vtable call.
+		if(m_pREScreenProcess && *((bool*)m_pREScreenProcess->mfGetParameter(SCREENPROCESS_NIGHTVISION, SCREENPROCESS_ACTIVE)))
 		{
 			static ICVar *pCVVolFog=GetConsole()->GetCVar("r_VolumetricFog");
 			int e_shadow_maps=GetCVars()->e_shadow_maps;					GetCVars()->e_shadow_maps=0;
@@ -1593,6 +1598,15 @@ void C3DEngine::SetupClearColor()
 {
 	bool bCameraInOutdoors = !m_pVisAreaManager->m_pCurArea && !(m_pVisAreaManager->m_pCurPortal && m_pVisAreaManager->m_pCurPortal->m_lstConnections.Count()>1);
 	GetRenderer()->SetClearColor(bCameraInOutdoors ? m_vFogColor : Vec3d(0,0,0));
+#if defined(VITA_DEBUG_CLEARCOLOR)
+	{
+		static int s_nFrames = 0;
+		if((++s_nFrames % 300) == 1)
+			GetLog()->UpdateLoadingScreen("\001[VITA CLEAR] outdoors=%d colour=%.3f %.3f %.3f skyRE=%p skySH=%p",
+				(int)bCameraInOutdoors, m_vFogColor[0], m_vFogColor[1], m_vFogColor[2],
+				(void*)m_pRESky, (void*)m_pSHSky);
+	}
+#endif
 
 	if(bCameraInOutdoors)
 	if(GetViewCamera().GetPos().z<GetWaterLevel() && m_pTerrain)

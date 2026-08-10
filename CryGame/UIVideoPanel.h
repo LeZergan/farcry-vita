@@ -1,5 +1,5 @@
 //-------------------------------------------------------------------------------------------------
-// Author: Márcio Martins
+// Author: Mï¿½rcio Martins
 //
 // Purpose:
 //  - A Bink Video Control
@@ -19,6 +19,12 @@
 
 #if !defined(WIN64) && !defined(LINUX) && !defined(NOT_USE_BINK_SDK)
 #	include "../binksdk/bink.h"
+#endif
+
+#if defined(__vita__)
+// Exported interface of the vendored LGPL Bink decoder, standing in for the
+// licensed RAD SDK.  Not BinkDecoder.h directly -- see VitaBink.h.
+#	include "../engine_port/VitaBink.h"
 #endif
 
 
@@ -92,6 +98,15 @@ public:
 	string				m_szVideoFile;
 #if !defined(WIN64) && !defined(LINUX) && !defined(NOT_USE_BINK_SDK)
 	HBINK					m_hBink;
+#endif
+#if defined(__vita__)
+	BinkHandle		m_VitaBink;
+	int						m_nVitaWidth;
+	int						m_nVitaHeight;
+	int						m_nVitaNumFrames;
+	float					m_fVitaFrameRate;
+	float					m_fVitaNextFrameTime;	//!< when the next frame is due, in seconds
+	bool					VitaAdvanceFrame();		//!< decodes/uploads a frame, false at end of video
 #endif
 	bool					m_bPaused;
 	bool					m_bPlaying;

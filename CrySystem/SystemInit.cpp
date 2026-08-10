@@ -30,6 +30,9 @@
 #include <CryMemoryManager.h>
 #include <ICryPak.h>
 #include <IMovieSystem.h>
+#if defined(__vita__)
+#include <CryMovie.h>
+#endif
 #include <IEntitySystem.h>
 #include <IInput.h>
 #include <ILog.h>
@@ -92,6 +95,12 @@ extern "C" IRenderer* PackageRenderConstructor(int argc, char* argv[], SCryRende
 /* Vita: see CSystem::InitFont() below -- same reasoning, matching
    CryFont/ICryFont.cpp's extern "C" definition. */
 extern "C" ICryFont* CreateCryFontInterface(ISystem *pSystem);
+/* CryAISystem is part of the monolithic Vita executable as well. */
+extern "C" IAISystem* CreateAISystem(ISystem *pSystem);
+/* CryMovie is part of the monolithic Vita executable too (see
+   CSystem::InitMovieSystem below) -- declared here to match its real,
+   non-extern-"C" definition in CryMovie/CryMovie.h/.cpp. */
+IMovieSystem* CreateMovieSystem(ISystem *pSystem);
 #endif
 
 //////////////////////////////////////////////////////////////////////////
@@ -410,15 +419,11 @@ bool CSystem::InitEntitySystem(WIN_HINSTANCE hInstance, WIN_HWND hWnd)
 /////////////////////////////////////////////////////////////////////////////////
 bool CSystem::InitInput(WIN_HINSTANCE hinst, WIN_HWND hwnd)
 {
-#if defined(LINUX)
-	/* Vita: CryInput/CryInput.cpp is real DirectInput8 (HINSTANCE,
-	   LPDIRECTINPUT8, POINT, ...) -- a genuine Windows-only dependency,
-	   not the broken-LoadDLL pattern fixed elsewhere this session. Porting
-	   real input to SceCtrl is a separate, not-yet-started undertaking
-	   (same category as the XRenderOGL/vitaGL renderer port). Skip input
-	   init entirely for now so boot can proceed toward rendering; m_pIInput
-	   stays NULL, matching every other unconditionally-guarded call site
-	   in this codebase (all check for a null renderer/input/etc already). */
+#if defined(__vita__)
+	extern IInput *CreateVitaInput(ISystem *system);
+	m_pIInput = CreateVitaInput(this);
+	return m_pIInput != 0;
+#elif defined(LINUX)
 	return true;
 #endif
 	m_dll.hInput = LoadDLL(DLL_INPUT);
@@ -574,7 +579,23 @@ bool CSystem::InitRenderer(WIN_HINSTANCE hinst, WIN_HWND hwnd,const char *szCmdL
 /////////////////////////////////////////////////////////////////////////////////
 bool CSystem::InitSound(WIN_HWND hwnd)
 {
-#if !defined(LINUX)
+#if defined(__vita__)
+  // Vita statically links CrySoundSystem.  The generic LINUX branch assumes
+  // a dedicated server and used to leave both interfaces null; CryGame's
+  // normal MenuOff path unconditionally resumes them when entering a level.
+  m_pISound = CreateSoundSystem(this, hwnd);
+  if (!m_pISound)
+  {
+    Error("Error creating the sound system interface");
+    return false;
+  }
+  m_pIMusic = m_pISound->CreateMusicSystem();
+  if (!m_pIMusic)
+  {
+    Error("Error creating the music system interface");
+    return false;
+  }
+#elif !defined(LINUX)
 #ifndef _XBOX
 	m_dll.hSound = LoadDLL(DLL_SOUND);
 	if(!m_dll.hSound)
@@ -788,7 +809,18 @@ bool CSystem::InitPhysics()
 /////////////////////////////////////////////////////////////////////////////////
 bool CSystem::InitMovieSystem()
 {
-#if !defined(LINUX)
+#if defined(__vita__)
+	// CryMovie is statically linked on Vita.  The generic Linux branch is a
+	// dedicated-server shortcut, but gameplay checkpoint serialization and
+	// level scripts require a live movie-system interface even when no Bink
+	// video decoder is present.
+	m_pIMovieSystem = CreateMovieSystem(this);
+	if (!m_pIMovieSystem)
+	{
+		Error("Error creating the movie system interface");
+		return false;
+	}
+#elif !defined(LINUX)
 #ifdef WIN32
 	m_dll.hMovie = LoadDLL(DLL_MOVIE);
 	if(!m_dll.hMovie)
@@ -819,7 +851,17 @@ bool CSystem::InitMovieSystem()
 /////////////////////////////////////////////////////////////////////////////////
 bool CSystem::InitAISystem()
 {
-#ifndef _XBOX
+#if defined(LINUX)
+	// Vita links CryAISystem into the executable.  Trying the desktop .so
+	// loader here both omitted AI and set CSystem's quit flag when the
+	// nonexistent cryaisystem.so could not be opened.
+	m_pAISystem = CreateAISystem(this);
+	if (!m_pAISystem)
+	{
+		Error("Cannot instantiate statically linked AISystem class");
+		return false;
+	}
+#elif !defined(_XBOX)
 	m_dll.hAI = LoadDLL(DLL_AI);
 	if (!m_dll.hAI)
 		return true;
@@ -932,16 +974,16 @@ bool CSystem::InitFileSystem()
 //////////////////////////////////////////////////////////////////////////
 bool CSystem::InitStreamEngine()
 {
-	// Vita: CRefStreamEngine's constructor hangs on Vita3K right around
-	// QueryPerformanceFrequency -- confirmed NOT our code (disassembly is
-	// clean, inlining QPF's body to bypass the call entirely didn't help,
-	// ruled out alignment/log-buffering too; looks like a Vita3K/dynarmic
-	// JIT quirk, see engine_port/compat/README.md). Skipping real
-	// construction for now so boot can proceed -- every m_pStreamEngine
-	// call site is null-checked (System.cpp's Update loop, SystemWin32.cpp's
-	// GetMemoryStatistics), so file loading just falls back to whatever
-	// synchronous path CryPak itself provides.
-	m_pStreamEngine = NULL;
+	// Vita: CRefStreamEngine's real constructor hangs on Vita3K right around
+	// QueryPerformanceFrequency (confirmed NOT our code -- see
+	// engine_port/compat/README.md). Real level loading (CStatObj's
+	// unconditional GetStreamEngine()->StartRead(), see
+	// Cry3DEngine/StatObjStream.cpp) turned out to need a genuinely working
+	// stream engine -- there's no null-checked fallback for it. CStreamEngine
+	// is CVitaStreamEngine here (see CrySystem/StreamEngine.h), a real
+	// synchronous implementation that sidesteps CRefStreamEngine's ctor
+	// entirely instead of trying to fix its hang.
+	m_pStreamEngine = new CStreamEngine(m_pIPak);
 	return true;
 }
 
@@ -1392,9 +1434,9 @@ bool CSystem::Init( const SSystemInitParams &params )
 	//////////////////////////////////////////////////////////////////////////
 	//if (!params.bPreview)
 	{
-#if defined(LINUX)
+	#if defined(LINUX) && !defined(__vita__)
 		CryLogAlways("MovieSystem initialization skipped for Linux dedicated server");
-#else
+	#else
 		CryLogAlways("MovieSystem initialization");
 		if (!InitMovieSystem())
 			return false;
@@ -1692,4 +1734,3 @@ void CSystem::InitScriptDebugger()
 	}
 #endif
 }
-

@@ -15,6 +15,71 @@
 #include <StlUtils.h>
 #include <IInput.h>
 
+#if defined(LINUX)
+// newlib starts in the "C" locale on Vita, where mbstowcs rejects every
+// non-ASCII byte. Far Cry string-table XML is explicitly UTF-8, so decode it
+// directly instead of depending on process-global locale state.
+static void DecodeUtf8(const char *source, wstring &destination)
+{
+	destination.clear();
+	const unsigned char *p = (const unsigned char *)source;
+	while (*p)
+	{
+		unsigned int codepoint;
+		unsigned int minimum;
+		int continuationCount;
+		if (*p < 0x80)
+		{
+			codepoint = *p++;
+			minimum = 0;
+			continuationCount = 0;
+		}
+		else if ((*p & 0xe0) == 0xc0)
+		{
+			codepoint = *p++ & 0x1f;
+			minimum = 0x80;
+			continuationCount = 1;
+		}
+		else if ((*p & 0xf0) == 0xe0)
+		{
+			codepoint = *p++ & 0x0f;
+			minimum = 0x800;
+			continuationCount = 2;
+		}
+		else if ((*p & 0xf8) == 0xf0)
+		{
+			codepoint = *p++ & 0x07;
+			minimum = 0x10000;
+			continuationCount = 3;
+		}
+		else
+		{
+			++p;
+			destination.push_back((wchar_t)0xfffd);
+			continue;
+		}
+
+		bool valid = true;
+		for (int i = 0; i < continuationCount; ++i)
+		{
+			if ((p[i] & 0xc0) != 0x80)
+			{
+				valid = false;
+				break;
+			}
+			codepoint = (codepoint << 6) | (p[i] & 0x3f);
+		}
+		if (valid)
+			p += continuationCount;
+
+		if (!valid || codepoint < minimum || codepoint > 0x10ffff ||
+			(codepoint >= 0xd800 && codepoint <= 0xdfff))
+			codepoint = 0xfffd;
+		destination.push_back((wchar_t)codepoint);
+	}
+}
+#endif
+
 //////////////////////////////////////////////////////////////////////
 // Construction/Destruction
 //////////////////////////////////////////////////////////////////////
@@ -69,7 +134,14 @@ void CStringTableMgr::AddControl(int nKey)
 	wchar_t szwKeyName[256] = {0};
 	char		szKey[256] = {0};
 
+	/* Vita maps the two mouse buttons and wheel to physical triggers/D-pad.
+	   Generate their @control<ID> strings through VitaInput as well so the
+	   stock Controls screen says R/L instead of desktop mouse terminology. */
+#if defined(__vita__)
+	if (true)
+#else
 	if (!IS_MOUSE_KEY(nKey))
+#endif
 	{
 		if (pInput->GetOSKeyName(nKey, szwKeyName, 255))
 		{
@@ -201,25 +273,24 @@ bool CStringTableMgr::LoadExcelXmlSpreadsheet( const string &sFileName )
 			sUTF_8_Str = sEnglishString;
 		}
 
-		int nUTF_8_Len = strlen(sUTF_8_Str);
-		int nUnicodeLen = nUTF_8_Len + 16; // + 16 just for safety.
-		wchar_t *sUnicodeStr = new wchar_t[ nUnicodeLen*sizeof(wchar_t) + 16 ];
 		// Use UTF-8 multibyte unicode decoding to convert to wide string.
 		// This is potentially not porrtable, for different platforms, alternative function must be used.
 #if defined(LINUX)
-		mbstowcs( sUnicodeStr, sUTF_8_Str, nUTF_8_Len );
-		sUnicodeStr[ nUTF_8_Len ] = 0;
+		wstring unicodeStr;
+		DecodeUtf8(sUTF_8_Str, unicodeStr);
 #else
+		int nUTF_8_Len = strlen(sUTF_8_Str);
+		int nUnicodeLen = nUTF_8_Len + 16; // + 16 just for safety.
+		wchar_t *sUnicodeStr = new wchar_t[nUnicodeLen];
 		MultiByteToWideChar( CP_UTF8,0,sUTF_8_Str,-1,sUnicodeStr,nUnicodeLen );
-#endif
 		wstring unicodeStr = sUnicodeStr;
+		SAFE_DELETE_ARRAY(sUnicodeStr);
+#endif
 		wstring::size_type nPos;
 		while ((nPos = unicodeStr.find(L"\\n",0,2))!=wstring::npos)
 		{
 			unicodeStr.replace(nPos,2,L"\n");
 		}
-
-		SAFE_DELETE_ARRAY(sUnicodeStr);
 
 		if (m_keysMap.find(sKeyString) != m_keysMap.end())
 		{

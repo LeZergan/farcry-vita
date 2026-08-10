@@ -20,6 +20,47 @@
 #include <IStreamEngine.h>
 #include "System.h"
 
+#if defined(LINUX)
+#include <string.h>
+/* Every log line used to pay a full open/append/close on the log file.  That
+   is invisible on a PC but not on a Vita memory card, and a level load writes
+   several thousand lines -- the open and close cost more than the write.  Hold
+   the handle open and flush after each line instead: the file on disk is just
+   as complete after a hard crash, which is the only thing the close per line
+   was actually buying.
+
+   The handle has to be dropped whenever anything else wants to open the same
+   file (the append-to-previous-line path and SetFileName's truncate). */
+static FILE *s_pCachedLogFile = NULL;
+static char  s_szCachedLogName[512] = {0};
+
+static void CloseCachedLogFile()
+{
+	if (s_pCachedLogFile)
+	{
+		fclose(s_pCachedLogFile);
+		s_pCachedLogFile = NULL;
+	}
+	s_szCachedLogName[0] = 0;
+}
+
+static FILE *GetCachedLogFile(const char *szFilename)
+{
+	if (!szFilename || !szFilename[0])
+		return NULL;
+	if (s_pCachedLogFile && strcmp(s_szCachedLogName, szFilename) == 0)
+		return s_pCachedLogFile;
+	CloseCachedLogFile();
+	s_pCachedLogFile = fxopen(szFilename, "at");
+	if (s_pCachedLogFile)
+	{
+		strncpy(s_szCachedLogName, szFilename, sizeof(s_szCachedLogName) - 1);
+		s_szCachedLogName[sizeof(s_szCachedLogName) - 1] = 0;
+	}
+	return s_pCachedLogFile;
+}
+#endif
+
 #ifdef _WIN32
 #include <time.h>
 #endif
@@ -420,6 +461,9 @@ void CLog::LogStringToFile( const char *szString,bool bAdd )
 
 	if (bAdd)
 	{
+#if defined(LINUX)
+		CloseCachedLogFile(); // this path reopens the file itself
+#endif
 		FILE *fp=fxopen(m_szFilename,"r+t");
 		if (fp)
 		{
@@ -435,11 +479,19 @@ void CLog::LogStringToFile( const char *szString,bool bAdd )
 	}
 	else
 	{
+#if defined(LINUX)
+		if (FILE * fp = GetCachedLogFile(m_szFilename))
+		{
+			fputs(szTemp,fp);
+			fflush(fp); // keep the on-disk tail as complete as the close used to
+		}
+#else
 		if(FILE * fp = fxopen(m_szFilename,"at"))
 		{
 			fputs(szTemp,fp);
 			fclose(fp);
-		}  
+		}
+#endif
 	}
 }
 
@@ -511,8 +563,11 @@ void CLog::SetFileName(const char *command)
 	if (!command) 
     return;
 
-	strcpy(m_szFilename,command); 
+	strcpy(m_szFilename,command);
 
+#if defined(LINUX)
+	CloseCachedLogFile(); // about to truncate the file out from under it
+#endif
 #ifndef _XBOX
 		FILE *fp=fxopen(m_szFilename,"wt");
     if (fp)
@@ -557,7 +612,14 @@ void CLog::UpdateLoadingScreen(const char *szFormat,...)
 		}
 	}
 	// Take this oportunity to update streaming engine.
-	GetISystem()->GetStreamEngine()->Update();
+	// Vita: m_pStreamEngine is deliberately left null (see CSystem::
+	// InitStreamEngine's comment in CrySystem/SystemInit.cpp) -- every
+	// other call site null-checks it, this one didn't, and it wasn't
+	// caught until real level loading started calling UpdateLoadingScreen
+	// with real content (the menu never exercises this path).
+	IStreamEngine *pStreamEngine = GetISystem()->GetStreamEngine();
+	if (pStreamEngine)
+		pStreamEngine->Update();
 }
 
 //////////////////////////////////////////////////////////////////////

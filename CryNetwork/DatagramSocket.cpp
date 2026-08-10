@@ -229,16 +229,23 @@ NRESULT CDatagramSocket::GetSocketAddresses(CIPAddress *pAddr, DWORD nMaCIPAddre
 			// CLog::Log("Hostname: %s\n", hp->h_name);
 			
 			i = 0;
-			while (hp->h_aliases[i]) 
+			// The Vita resolver leaves these arrays null rather than empty,
+			// so check the array itself before walking it.
+			while (hp->h_aliases && hp->h_aliases[i])
 			{
 				//	CLog::Log("Alias: %s\n", hp->h_aliases[i]);
 				i++;
 			}
 			i = 0;
-			while (hp->h_addr_list[i] && i < nMaCIPAddresses)
+			while (hp->h_addr_list && hp->h_addr_list[i] && i < nMaCIPAddresses)
 			{
 				sockaddr_in temp;
-				memcpy(&(temp.sin_addr), hp->h_addr_list[i], hp->h_length);
+				int nAddrLen = hp->h_length;
+				if (nAddrLen > (int)sizeof(temp.sin_addr))
+					nAddrLen = (int)sizeof(temp.sin_addr);
+				memset(&(temp.sin_addr), 0, sizeof(temp.sin_addr));
+				if (nAddrLen > 0)
+					memcpy(&(temp.sin_addr), hp->h_addr_list[i], nAddrLen);
 				temp.sin_port = port.sin_port;
 				pAddr[i].Set(&temp);
 				i++;

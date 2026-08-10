@@ -981,7 +981,17 @@ int CSound::GetLengthMs()
 	switch (m_pSound->GetType())
 	{
 		case btSTREAM:	return CS_Stream_GetLengthMs(m_pSound->GetStream());
-		case btSAMPLE:	return (int)((float)CS_Sample_GetLength(m_pSound->GetSample())/(float)m_pSound->GetBaseFreq()*1000.0f);
+		case btSAMPLE:
+		{
+			// A sample whose base frequency is still unknown used to divide by
+			// zero here and hand callers a NaN length.  CryMovie writes that
+			// straight back into the sound key's duration (CAnimSceneNode::
+			// ApplySoundKey), so one such sound corrupted a cutscene's timing.
+			const int nBaseFreq = m_pSound->GetBaseFreq();
+			if (nBaseFreq <= 0)
+				return 0;
+			return (int)((float)CS_Sample_GetLength(m_pSound->GetSample())/(float)nBaseFreq*1000.0f);
+		}
 	}
 	return 0;
 }

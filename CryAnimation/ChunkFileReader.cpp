@@ -128,6 +128,9 @@ bool CChunkFileReader::open(const char* szFileName, unsigned nFlags)
 
 void CChunkFileReader::close()
 {
+#if defined(LINUX)
+	freeAlignedChunks();
+#endif
 	m_arrChunkSize.clear();
 	m_pFile = NULL;
 	m_pChunks = NULL;
@@ -158,11 +161,54 @@ const void* CChunkFileReader::getChunkData(int nChunkIdx)const
 		if (nOffset < sizeof(FileHeader) || nOffset >= getFileHeader().ChunkTableOffset)
 			return 0;
 		else
-			return m_pFile->getData(nOffset);
+		{
+			const void* pChunkData = m_pFile->getData(nOffset);
+#if defined(LINUX)
+			if (pChunkData && (((uintptr_t)pChunkData) & 3))
+				return getAlignedChunk(nChunkIdx, pChunkData);
+#endif
+			return pChunkData;
+		}
 	}
 	else
 		return 0;
 }
+
+#if defined(LINUX)
+//////////////////////////////////////////////////////////////////////////
+// Returns a 4-byte aligned copy of a chunk the file placed off a boundary.
+// The copy lives as long as the reader does, so pointers handed out here stay
+// valid for exactly as long as the ones pointing into the file image do.
+const void* CChunkFileReader::getAlignedChunk(int nChunkIdx, const void* pChunkData) const
+{
+	if (m_arrAlignedChunk.size() != m_arrChunkSize.size())
+		m_arrAlignedChunk.resize(m_arrChunkSize.size(), NULL);
+
+	if (nChunkIdx < 0 || nChunkIdx >= (int)m_arrAlignedChunk.size())
+		return pChunkData; // cannot size the copy; better misaligned than wrong
+
+	if (!m_arrAlignedChunk[nChunkIdx])
+	{
+		const int nSize = m_arrChunkSize[nChunkIdx];
+		if (nSize <= 0)
+			return pChunkData;
+		void* pCopy = malloc(nSize);
+		if (!pCopy)
+			return pChunkData;
+		memcpy(pCopy, pChunkData, nSize);
+		m_arrAlignedChunk[nChunkIdx] = pCopy;
+	}
+	return m_arrAlignedChunk[nChunkIdx];
+}
+
+void CChunkFileReader::freeAlignedChunks()
+{
+	for (unsigned i = 0; i < m_arrAlignedChunk.size(); ++i)
+		if (m_arrAlignedChunk[i])
+			free(m_arrAlignedChunk[i]);
+	m_arrAlignedChunk.clear();
+}
+#endif
 
 // number of chunks
 int CChunkFileReader::numChunks()const

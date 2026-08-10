@@ -69,8 +69,10 @@ static unsigned int sGetBlendState(int nMode)
       nBlend = GS_BLSRC_ZERO | GS_BLDST_SRCCOL;
       break;
     case 2:
+      nBlend = GS_BLSRC_SRCCOL | GS_BLDST_ZERO;
+      break;
     case 3:
-      assert(0);
+      nBlend = GS_BLSRC_SRCCOL | GS_BLDST_ONEMINUSSRCCOL;
       break;
     case 4:
       nBlend = GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA;

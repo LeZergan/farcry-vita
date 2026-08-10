@@ -19,6 +19,7 @@
 
 #include <IRenderer.h>
 #include <ILog.h>
+#include <ITimer.h>
 #include <I3DEngine.h>
 #include <algorithm>
 #include <IConsole.h>
@@ -1302,7 +1303,17 @@ bool CGraph::ReadFromFile(const char * szName)
 	CCryFile file;;
 	if (file.Open( szName,"rb"))
 	{
+		/* The AI graph read is one of the few load steps that announces itself
+		   as slow ("might take some time") and it runs twice per level.  Time
+		   it, so the level-load budget is measured rather than guessed at. */
+		const float fGraphStart = GetAISystem() && GetAISystem()->m_pSystem && GetAISystem()->m_pSystem->GetITimer()
+			? GetAISystem()->m_pSystem->GetITimer()->GetAsyncCurTime() : 0.0f;
 		ReadNodes( file );
+		if (GetAISystem() && GetAISystem()->m_pSystem && GetAISystem()->m_pSystem->GetITimer() &&
+			GetAISystem()->m_pSystem->GetILog())
+			GetAISystem()->m_pSystem->GetILog()->LogToFile("\001[VITA][LOADTIME] AI graph '%s' read in %.2f s",
+				szName ? szName : "<null>",
+				GetAISystem()->m_pSystem->GetITimer()->GetAsyncCurTime() - fGraphStart);
 		return true;
 	}
 	//[Timur]
@@ -1358,6 +1369,24 @@ bool CGraph::ReadNodes( CCryFile &file )
 	m_pAISystem->m_pSystem->GetILog()->UpdateLoadingScreen("\003[AISYSTEM] Reading node descriptors");
 
 	file.Read( &iNumber, sizeof(int) );
+	#ifdef __vita__
+	SceKernelFreeMemorySizeInfo vitaGraphMem;
+	memset(&vitaGraphMem, 0, sizeof(vitaGraphMem));
+	vitaGraphMem.size = sizeof(vitaGraphMem);
+	sceKernelGetFreeMemorySize(&vitaGraphMem);
+	sceClibPrintf("[VITA AIGRAPH] descriptors=%d descriptorBytes=%d user=%d cdram=%d phycont=%d\n",
+		iNumber, iNumber * (int)sizeof(NodeDescriptor), vitaGraphMem.size_user,
+		vitaGraphMem.size_cdram, vitaGraphMem.size_phycont);
+	#endif
+#if defined(LINUX)
+	SceKernelFreeMemorySizeInfo vitaGraphMem2;
+	memset(&vitaGraphMem2, 0, sizeof(vitaGraphMem2));
+	vitaGraphMem2.size = sizeof(vitaGraphMem2);
+	sceKernelGetFreeMemorySize(&vitaGraphMem2);
+	sceClibPrintf("[VITA AIGRAPH2] descriptors=%d descriptorBytes=%d user=%d cdram=%d phycont=%d\n",
+		iNumber, iNumber * (int)sizeof(NodeDescriptor), vitaGraphMem2.size_user,
+		vitaGraphMem2.size_cdram, vitaGraphMem2.size_phycont);
+#endif
 
 	if (iNumber>0) 
 	{
@@ -1375,6 +1404,28 @@ bool CGraph::ReadNodes( CCryFile &file )
 	int index=0;
 	for (ni=m_vBuffer.begin();ni!=m_vBuffer.end();ni++,index++)
 	{
+		#ifdef __vita__
+		if((index & 255) == 0)
+		{
+			memset(&vitaGraphMem, 0, sizeof(vitaGraphMem));
+			vitaGraphMem.size = sizeof(vitaGraphMem);
+			sceKernelGetFreeMemorySize(&vitaGraphMem);
+			sceClibPrintf("[VITA AIGRAPH] create=%d/%d user=%d cdram=%d phycont=%d\n",
+				index, (int)m_vBuffer.size(), vitaGraphMem.size_user,
+				vitaGraphMem.size_cdram, vitaGraphMem.size_phycont);
+		}
+		#endif
+#if defined(LINUX)
+		if((index & 255) == 0)
+		{
+			memset(&vitaGraphMem2, 0, sizeof(vitaGraphMem2));
+			vitaGraphMem2.size = sizeof(vitaGraphMem2);
+			sceKernelGetFreeMemorySize(&vitaGraphMem2);
+			sceClibPrintf("[VITA AIGRAPH2] create=%d/%d user=%d cdram=%d phycont=%d\n",
+				index, (int)m_vBuffer.size(), vitaGraphMem2.size_user,
+				vitaGraphMem2.size_cdram, vitaGraphMem2.size_phycont);
+		}
+#endif
 		NodeDescriptor buffer = (*ni);
 		GraphNode *pNode = CreateNewNode(!buffer.bCreated);//new GraphNode;//&m_vNodes[index];
 		

@@ -3,7 +3,6 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
-#include "Input.h"
 #include "XActionMap.h"
 #include "XActionMapManager.h"
 

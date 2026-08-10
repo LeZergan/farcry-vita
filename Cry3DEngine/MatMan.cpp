@@ -434,15 +434,23 @@ bool CMatMan::LoadMaterialShader( IMatInfo *pMtl,const char *sShader,int mtlFlag
 	if (publicsNode)
 	{
 		pTemplShader = GetSystem()->GetIRenderer()->EF_LoadShader( sShader,eSH_Misc,0,nShaderGenMask );
-		TArray<SShaderParam> &params = pTemplShader->GetPublicParams();
-		if (!params.empty())
+		// Vita: EF_LoadShader is a documented, deliberate stub (real shader
+		// pipeline out of scope -- see VitaRenderer.h) and always returns
+		// null here; this is the first material with a publics node this
+		// session actually reached this call, so guard it rather than
+		// dereference null.
+		if (pTemplShader)
 		{
-			// Parse public parameters, and assign them to source shader resources.
-			ParsePublicParams( params,publicsNode );
-			sr.m_ShaderParams.Reserve( params.size() );
-			for (unsigned int i = 0; i < params.size(); i++)
+			TArray<SShaderParam> &params = pTemplShader->GetPublicParams();
+			if (!params.empty())
 			{
-				sr.m_ShaderParams.push_back(params[i]);
+				// Parse public parameters, and assign them to source shader resources.
+				ParsePublicParams( params,publicsNode );
+				sr.m_ShaderParams.Reserve( params.size() );
+				for (unsigned int i = 0; i < params.size(); i++)
+				{
+					sr.m_ShaderParams.push_back(params[i]);
+				}
 			}
 		}
 	}

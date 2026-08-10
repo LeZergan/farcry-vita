@@ -3,7 +3,6 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
-#include "Input.h"
 #include "XActionMap.h"
 #include "XActionMapManager.h"
  
@@ -19,7 +18,7 @@ static char THIS_FILE[] = __FILE__;
 // Construction/Destruction
 //////////////////////////////////////////////////////////////////////
 
-CXActionMapManager::CXActionMapManager(CInput *pInput)
+CXActionMapManager::CXActionMapManager(IInput *pInput)
 {
 	m_bEnabled = 1;
 	m_pInput=pInput;
@@ -166,9 +165,13 @@ void CXActionMapManager::SetActionMap(const char *s)
 		}
 
 		m_pCurrentActionMap = pNewActionMap;
+		m_sCurrentActionMap = s ? s : "";
 	}
 	else
+	{
 		m_pCurrentActionMap=NULL;
+		m_sCurrentActionMap.clear();
+	}
 }
 
 bool CXActionMapManager::CheckActionMap(XACTIONID nActionID)

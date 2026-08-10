@@ -184,7 +184,10 @@ typedef struct in_addr_windows
 #define __TIMESTAMP__ __DATE__" "__TIME__
 
 // function renaming
-#define _finite __finite
+// Vita: __finite is a glibc-specific non-standard name; newlib (vitasdk's
+// libc) doesn't provide it. isfinite() is the C99/C++11 standard equivalent
+// and is available everywhere glibc's __finite was.
+#define _finite isfinite
 #define _snprintf snprintf
 #define _isnan isnan
 #define stricmp strcasecmp

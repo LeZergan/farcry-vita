@@ -213,6 +213,9 @@ int vl_isvector(lua_State *L,int index)
 	return lua_tag(L,index)==g_vectortag;
 }
 
+#ifdef __cplusplus
+extern "C"
+#endif
 int vl_initvectorlib(lua_State *L)
 {
 	g_vectortag=lua_newtype(L,"vector",LUA_TUSERDATA);

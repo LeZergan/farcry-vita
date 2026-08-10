@@ -633,8 +633,9 @@ struct IStatInstGroup
 		pMaterial = 0;
     fBackSideLevel = 1.f;
     bCalcLighting = true;
-    bUseSprites = true;
+		bUseSprites = true;
 		bFadeSize = true;
+		m_dwRndFlags = 0;
 	}
 
 	struct IStatObj * pStatObj;

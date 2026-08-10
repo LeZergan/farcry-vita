@@ -19,6 +19,29 @@
 #include <stdlib.h>
 #include <time.h>
 #include <stdint.h>
+#include <psp2/kernel/clib.h> /* sceClibPrintf -- used unconditionally below (BOOTTRACE), not just under CRYCOMPAT_TRACE_CRITSEC */
+#include <psp2/kernel/sysmem.h>
+
+/* The port is instrumented with sceClibPrintf tracing throughout.  Every call
+   goes out over the kernel debug channel, which is nearly free under emulation
+   but expensive on real hardware: the per-object file-search traces below run
+   to several thousand calls during a single level load, and the renderer's
+   per-draw traces fire thousands of times a second.  Compile them all out
+   unless FARCRY_VITA_TRACE is defined -- this header is force-included ahead
+   of every translation unit, so the definition reaches all of them, and
+   clib.h above has already supplied the real declaration.
+
+   Boot and load progress are still recorded in boot_marker.txt and Log.txt,
+   neither of which goes through this path. */
+#if !defined(FARCRY_VITA_TRACE) && !defined(sceClibPrintf)
+#define sceClibPrintf(...) ((void)0)
+#endif
+
+// Several original CryGame headers relied on the MSVC precompiled-header
+// include order for this declaration.  The Vita build force-includes this
+// compatibility header, so make that implicit dependency explicit before
+// UIWidget.h is parsed by GCC.
+class CUIScreen;
 #ifdef __cplusplus
 #include <string>
 #include <algorithm> /* DefenceWall.cpp uses std::replace without including this itself */
@@ -62,6 +85,47 @@ inline void LeaveCriticalSection(CRITICAL_SECTION *cs)  {
 /* ---- FILETIME: must stay a plain 8-byte, two-DWORD layout -- CryPak.cpp
    reinterpret-casts a 64-bit tick count directly onto this struct. ---- */
 struct FILETIME { unsigned int dwLowDateTime; unsigned int dwHighDateTime; };
+
+/* ---- SYSTEMTIME / GetLocalTime -- real, backed by localtime(). Moved here
+   (force-included everywhere) instead of CryCompatIO.h (only reachable from
+   the RefStreamEngine.h include chain) since CryGame's own sources
+   (GameLoading.cpp) need it directly, with no HANDLE dependency to wait
+   for. CryCompatIO.h's own copy is guarded out via SYSTEMTIME_DEFINED. ---- */
+#define SYSTEMTIME_DEFINED
+struct SYSTEMTIME {
+	unsigned short wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, wMilliseconds;
+};
+inline void GetLocalTime(SYSTEMTIME *st) {
+	time_t t = time(NULL);
+	struct tm lt;
+	localtime_r(&t, &lt);
+	st->wYear = lt.tm_year + 1900;
+	st->wMonth = lt.tm_mon + 1;
+	st->wDayOfWeek = lt.tm_wday;
+	st->wDay = lt.tm_mday;
+	st->wHour = lt.tm_hour;
+	st->wMinute = lt.tm_min;
+	st->wSecond = lt.tm_sec;
+	st->wMilliseconds = 0;
+}
+
+/* ---- MakeSureDirectoryPathExists -- real, backed by mkdir(), creating
+   each path component in turn (POSIX mkdir doesn't do this recursively). ---- */
+inline bool MakeSureDirectoryPathExists(const char *path) {
+	char buf[512];
+	strncpy(buf, path, sizeof(buf) - 1);
+	buf[sizeof(buf) - 1] = 0;
+	for (char *p = buf + 1; *p; p++) {
+		if (*p == '/' || *p == '\\') {
+			char c = *p;
+			*p = 0;
+			mkdir(buf, 0755);
+			*p = c;
+		}
+	}
+	mkdir(buf, 0755);
+	return true;
+}
 
 /* ---- File attributes / GetFileAttributes ---- */
 #define FILE_ATTRIBUTE_NORMAL    0x00000080u
@@ -125,6 +189,13 @@ inline uint64_t __rdtsc() {
 /* Cross-checked against rohit-n/NearChuckle (a real, working Linux source
    port of this same engine) -- confirms the overall approach here and
    fills in a few pieces that port also needed. */
+/* CryGame's XServer.cpp: same real tick-count semantics as GetTickCount
+   below, just Crytek's own alternate spelling for it. */
+inline unsigned int GetCurrentTime() {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (unsigned int)((unsigned long long)ts.tv_sec * 1000ULL + ts.tv_nsec / 1000000ULL);
+}
 inline unsigned int GetTickCount() {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -145,7 +216,10 @@ inline char *_strlwr(char *s) { return strlwr(s); }
    this one just isn't among them. */
 #define __declspec(x)
 #define RemoveCRLF(...) ((void)0)
-inline bool compareTextFileStrings(const char *a, const char *b) { return strcmp(a, b) == 0; }
+/* CryEngine's Linux XML code uses this as a strcmp-compatible comparator
+   (all callers test `compareTextFileStrings(...) == 0`).  Returning bool
+   inverts the meaning and makes every unequal tag look like a match. */
+inline int compareTextFileStrings(const char *a, const char *b) { return strcmp(a, b); }
 
 /* vitasdk's newlib declares fnmatch() (fnmatch.h) but doesn't actually
    implement it in libc.a -- a real, minimal implementation of the
@@ -281,13 +355,20 @@ inline void _makepath(char *path, const char *drive, const char *dir, const char
 }
 
 inline void GlobalMemoryStatus(MEMORYSTATUS *lpmem) {
-	/* Real Vita RAM figures (sceKernelGetFreeMemorySize) belong here once
-	   this actually runs on-device; 512MB total/256MB free is a
-	   placeholder in the right ballpark for compile-time testing. */
+	/* Report the hardware total and the process's actual current Vita free
+	   main-memory pools.  CDRAM is the separate 128 MiB graphics pool and
+	   must not be advertised to CryEngine as general-purpose RAM. */
+	SceKernelFreeMemorySizeInfo info;
+	memset(&info, 0, sizeof(info));
+	info.size = sizeof(info);
+	int result = sceKernelGetFreeMemorySize(&info);
+	unsigned int availMain = result >= 0
+		? (unsigned int)(info.size_user + info.size_phycont)
+		: 0;
 	lpmem->dwLength = sizeof(MEMORYSTATUS);
-	lpmem->dwMemoryLoad = 50;
+	lpmem->dwMemoryLoad = 100u - (unsigned int)(((uint64_t)availMain * 100u) / (512u * 1024u * 1024u));
 	lpmem->dwTotalPhys = lpmem->dwTotalVirtual = 512u * 1024 * 1024;
-	lpmem->dwAvailPhys = lpmem->dwAvailVirtual = 256u * 1024 * 1024;
+	lpmem->dwAvailPhys = lpmem->dwAvailVirtual = availMain;
 	lpmem->dwTotalPageFile = lpmem->dwAvailPageFile = 0;
 }
 

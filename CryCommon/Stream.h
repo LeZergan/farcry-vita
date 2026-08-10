@@ -1115,7 +1115,7 @@ inline bool CStream::Seek(size_t dwPos)
 
 #ifndef NOT_COOKIEFIED
 	#define WRITE_COOKIE_NO(stm,c) {\
-	if((GetISystem()->GetStreamEngine()->GetStreamCompressionMask()&0x8)==0  || !GetISystem()->GetIGame()->GetModuleState(EGameMultiplayer))\
+	if(!GetISystem()->GetStreamEngine() || (GetISystem()->GetStreamEngine()->GetStreamCompressionMask()&0x8)==0  || !GetISystem()->GetIGame()->GetModuleState(EGameMultiplayer))\
 		stm.Write((BYTE)(c));\
 	}
 	#define WRITE_COOKIE(stm) WRITE_COOKIE_NO(stm,0xAA);
@@ -1126,7 +1126,7 @@ inline bool CStream::Seek(size_t dwPos)
 
 #ifndef NOT_COOKIEFIED
 	#define VERIFY_COOKIE_NO(stm,c) {\
-	if((GetISystem()->GetStreamEngine()->GetStreamCompressionMask()&0x8)==0 || !GetISystem()->GetIGame()->GetModuleState(EGameMultiplayer))\
+	if(!GetISystem()->GetStreamEngine() || (GetISystem()->GetStreamEngine()->GetStreamCompressionMask()&0x8)==0 || !GetISystem()->GetIGame()->GetModuleState(EGameMultiplayer))\
 	{\
 		BYTE cCookie; stm.Read(cCookie);\
 		if(cCookie!=(BYTE)(c))\
@@ -1138,7 +1138,7 @@ inline bool CStream::Seek(size_t dwPos)
 	} 
 	#define VERIFY_COOKIE(stm) VERIFY_COOKIE_NO(stm,0xAA)
 	#define VERIFY_ENTITY_COOKIE_NO(stm,c) {\
-		if((GetISystem()->GetStreamEngine()->GetStreamCompressionMask()&0x8)==0 || !GetISystem()->GetIGame()->GetModuleState(EGameMultiplayer))\
+		if(!GetISystem()->GetStreamEngine() || (GetISystem()->GetStreamEngine()->GetStreamCompressionMask()&0x8)==0 || !GetISystem()->GetIGame()->GetModuleState(EGameMultiplayer))\
 		{\
 			BYTE cCookie; stm.Read(cCookie);\
 			if (cCookie!=(BYTE)c)\

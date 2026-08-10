@@ -218,6 +218,21 @@ bool _XMLDOMParserImpl::parse( std::vector<unsigned char> &buffer,string &errorS
 	memHandler.free_fcn = CryModuleFree;
 
 	XML_Parser parser = XML_ParserCreate_MM(NULL,&memHandler,NULL);
+	if (!parser)
+	{
+		// Vita: real, honest failure -- XML_ParserCreate_MM can fail (e.g.
+		// CryModuleMalloc returning null), and every real caller up the
+		// chain (CStringTableMgr::LoadExcelXmlSpreadsheet etc.) already
+		// null-checks this function's bool return; this guard was simply
+		// missing here, the first real crash site once CryGame's own real
+		// UI/XML code started actually running for the first time this
+		// session (see engine_port/LeafBufferVita.cpp and friends for the
+		// established "the crash reveals the never-before-exercised
+		// path" pattern this whole port has followed).
+		errorString = "XML_ParserCreate_MM failed";
+		m_bErrorState = true;
+		return false;
+	}
 
 	XML_SetUserData( parser, this );
 	XML_SetElementHandler( parser, EXPAT_XML_StartElement,EXPAT_XML_EndElement );

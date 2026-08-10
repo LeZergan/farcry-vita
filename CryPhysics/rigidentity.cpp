@@ -831,7 +831,13 @@ int CRigidEntity::RegisterContactPoint(masktype &contact_mask, int idx, const ve
 			CPhysicalEntity *pCollider = m_pColliders[j]; 
 			pCollider->RemoveCollider(this); RemoveCollider(pCollider);
 		}
-		m_pColliderContacts[AddCollider(g_CurColliders[idx])] |= getmask(i);
+		/* AddCollider reallocates m_pColliderContacts, so the index has to be
+		   computed before the array base is read.  C++ leaves the order of the
+		   two unspecified; MSVC evaluated the call first, GCC loads the base
+		   first, which on an entity whose collider arrays have not been grown
+		   yet means indexing a null pointer. */
+		const int iContactCollider = AddCollider(g_CurColliders[idx]);
+		m_pColliderContacts[iContactCollider] |= getmask(i);
 		g_CurColliders[idx]->AddCollider(this);
 		contact_mask |= getmask(i);
 	} else if (bUseSimpleSolver || 
@@ -1151,7 +1157,10 @@ int CRigidEntity::RegisterConstraint(const vectorf &pt0,const vectorf &pt1, int 
 		if (pConstraints) delete[] pConstraints;
 		if (pInfos) delete[] pInfos;
 	}
-	m_pColliderConstraints[AddCollider(pBuddy)] |= getmask(i);
+	// Same unspecified-evaluation-order trap as in the contact path above:
+	// AddCollider is what allocates m_pColliderConstraints in the first place.
+	const int iConstraintCollider = AddCollider(pBuddy);
+	m_pColliderConstraints[iConstraintCollider] |= getmask(i);
 	pBuddy->AddCollider(this);
 	
 	m_pConstraints[i].pt[0] = pt0;

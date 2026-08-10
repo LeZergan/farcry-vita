@@ -762,3 +762,9 @@ void ForceCompilerToGenerateCodeForMatrixTemplates()
 	mtxr.determinant();
 	mtxr.invert();
 }
+
+/* GCC legitimately discards the legacy uncalled function above at -O3, so
+   its implicit template-instantiation side effect is not reliable.  Emit the
+   two concrete matrix implementations CryPhysics uses explicitly. */
+template class matrix_tpl<float>;
+template class matrix_tpl<double>;

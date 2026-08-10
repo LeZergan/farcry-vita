@@ -45,8 +45,8 @@ ZIO* zsopen (ZIO* z, const char* s, const char *name) {
 
 static int zffilbuf (ZIO* z) {
   size_t n;
-  if (CryPakFEof((FILE *)z->u)) return EOZ;
-  n = CryPakFRead(z->buffer, 1, ZBSIZE, (FILE *)z->u);
+  if (LuaCryPakFEof((FILE *)z->u)) return EOZ;
+  n = LuaCryPakFRead(z->buffer, 1, ZBSIZE, (FILE *)z->u);
   if (n==0) return EOZ;
   z->n = n-1;
   z->p = z->buffer;

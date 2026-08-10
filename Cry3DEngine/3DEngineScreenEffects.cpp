@@ -55,8 +55,18 @@ void C3DEngine:: SetScreenFx(const char *pEffectName, int iActive)
   // to avoid an untreackable crash in mscvdll strcmp
 	if (!pEffectName)
   {
-    return; 
-  }	
+    return;
+  }
+
+  // Vita: m_pREScreenProcess is null -- CREScreenProcess's real constructor
+  // needs the real shader pipeline (see VitaRenderer.cpp's EF_CreateRE
+  // comment: "a couple of no-op virtual overrides can't stand in for" it),
+  // a documented, deliberate scope cut. Every branch below dereferences it
+  // unconditionally; this is the first call site that's actually run this
+  // session (via CXGame's real StartLevel handler), so guard it here
+  // rather than at each of the five branches.
+  if (!m_pREScreenProcess)
+    return;
 
   if(!strcmp(pEffectName, "NightVision"))
   {     
@@ -94,8 +104,13 @@ void C3DEngine:: SetScreenFxParam(const char *pEffectName, const char *pEffectPa
   // to avoid an untreackable crash in mscvdll strcmp
   if (!pEffectName || !pEffectParam)
   {
-    return; 
+    return;
   }
+
+  // Vita: see SetScreenFx's own comment above -- same null
+  // m_pREScreenProcess, same fix.
+  if (!m_pREScreenProcess)
+    return;
 
   // set parameters for screen fade
   if(!stricmp(pEffectName, "ScreenFade"))
@@ -327,6 +342,13 @@ void C3DEngine::ResetScreenFx(void)
 // process all screen space special fx's
 void C3DEngine::ProcessScreenEffects()
 {
+#if defined(__vita__)
+  // The Vita backend does not implement Crytek's desktop multi-pass Cg post
+  // pipeline.  Running its orchestration only allocates render objects and
+  // dereferences renderer-only CVars for effects that cannot be drawn.  Keep
+  // gameplay-owned effect state in CREScreenProcess, but omit this GPU pass.
+  return;
+#endif
   // don't allow this in recursive rendering..
   if(m_pObjManager->m_nRenderStackLevel!=0 || !m_pREScreenProcess)
   {
@@ -335,9 +357,20 @@ void C3DEngine::ProcessScreenEffects()
 
   FUNCTION_PROFILER( GetSystem(), PROFILE_RENDERER );
   
-  // get console vars 
+  // get console vars
   static ICVar *pDisableSfx=GET_CVAR("r_DisableSfx");
   static ICVar *pResetSfx=GET_CVAR("r_ResetScreenFx");
+
+  /* Vita: OpenRenderLibrary() (CrySystem/SystemInit.cpp) runs before
+     InitConsole(), so CVitaRenderer's RegisterVitaRendererCVars() sees a
+     null iConsole and skips registration -- GetCVar() below returns null
+     forever after (confirmed crashing with a null vtable call the first
+     time a real frame reached this function). Screen-effects post-
+     processing is already out of scope for this port (CREScreenProcess is
+     a documented null stub); bail the same way the guard above already
+     does for it. */
+  if (!pDisableSfx || !pResetSfx)
+    return;
 
   // reset screen effects state
   if(pResetSfx->GetIVal()!=0)

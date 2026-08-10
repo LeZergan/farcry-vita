@@ -204,6 +204,7 @@ void CXGame::RefreshServerList()
 {
 	m_ServersInfos.clear();
 	if(m_pServerSnooper)
-		m_pServerSnooper->SearchForLANServers(GetCurrentTime());
+		m_pServerSnooper->SearchForLANServers(
+			(unsigned int)(GetSystem()->GetITimer()->GetCurrTime() * 1000.0f));
 	TRACE("Refresh for lan");
 }

@@ -239,6 +239,23 @@ bool CAnimEntityNode::ResolveEntity()
 	if (!pEntitySystem)
 		return false;
 	m_entity = pEntitySystem->GetEntity(m_EntityId);
+	if (!m_entity)
+	{
+		/* A sequence stores the entity id the level had when the scene was
+		   authored.  Those ids are handed out at load time and are not stable,
+		   so a stale one resolves to nothing and the node animates nothing --
+		   for the camera node that is exactly why cut-scene views sat frozen
+		   on a single spot.  Animation nodes carry the entity's name, so fall
+		   back to that, and adopt the id we actually found so the lookup is
+		   paid once rather than every frame. */
+		const char *szEntityName = GetName();
+		if (szEntityName && szEntityName[0])
+		{
+			m_entity = pEntitySystem->GetEntity(szEntityName);
+			if (m_entity)
+				m_EntityId = m_entity->GetId();
+		}
+	}
 	return (m_entity != NULL);
 }
 
@@ -253,7 +270,27 @@ void CAnimEntityNode::Animate( SAnimContext &ec )
 	if (!m_entity)
 	{
 		if (!ResolveEntity())
+		{
+			/* Silent until now.  A node with no entity animates nothing, and
+			   for the camera node that is precisely why cut-scene views sit
+			   frozen on one spot instead of following the shot -- the sequence
+			   is playing, it just has nothing to move.  Name the node once so
+			   the failure is chaseable instead of invisible. */
+			static std::map<std::string, bool> s_reportedUnresolved;
+			const char *szNodeName = GetName();
+			const std::string sKey = (szNodeName && szNodeName[0]) ? szNodeName : "<unnamed>";
+			if (s_reportedUnresolved.size() < 32 &&
+				s_reportedUnresolved.find(sKey) == s_reportedUnresolved.end())
+			{
+				s_reportedUnresolved[sKey] = true;
+				if (GetMovieSystem() && GetMovieSystem()->GetSystem() &&
+					GetMovieSystem()->GetSystem()->GetILog())
+					GetMovieSystem()->GetSystem()->GetILog()->LogToFile(
+						"\001[VITA][MOVIE] sequence node '%s' has no entity -- it animates nothing",
+						sKey.c_str());
+			}
 			return;
+		}
 	}
 
 	Vec3 pos = m_pos;
@@ -757,8 +794,13 @@ void CAnimEntityNode::ApplySoundKey( IAnimTrack *pTrack,int nCurrKey,int nLayer,
 		if (m_SoundInfo[nLayer].pSound)
 		{
 			m_SoundInfo[nLayer].nLength=m_SoundInfo[nLayer].pSound->GetLengthMs();
-			key.fDuration = ((float)m_SoundInfo[nLayer].nLength) / 1000.0f;
-			pTrack->SetKey( nCurrKey,&key ); // Update key duration.
+			// Same reasoning as CAnimSceneNode::ApplySoundKey: only trust a real
+			// length, otherwise keep the duration authored into the sequence.
+			if (m_SoundInfo[nLayer].nLength > 0)
+			{
+				key.fDuration = ((float)m_SoundInfo[nLayer].nLength) / 1000.0f;
+				pTrack->SetKey( nCurrKey,&key ); // Update key duration.
+			}
 		}
 	}else
 	{

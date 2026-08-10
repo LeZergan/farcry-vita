@@ -57,23 +57,16 @@ void CXGame::SetConfigToActionMap(const char *pszActionName, ...)
 		return;
 	ActionInfo &Info=It->second;
 	va_list v;
-	va_start(v, pszActionName);            
-#if defined(LINUX64)
+	va_start(v, pszActionName);
+	// va_list is not a byte pointer on ARM EABI (or on several other GCC
+	// targets).  Use the standard accessor for every architecture instead of
+	// relying on the old 32-bit MSVC stack layout.
 	char *sActionMapName=va_arg(v, char*);
 	while (*sActionMapName)
 	{
 		Info.vecSetToActionMap.push_back(string(sActionMapName));
 		sActionMapName=va_arg(v, char*);
 	}
-#else
-	char *sActionMapName=*(char**)v;
-
-	while (*sActionMapName)
-	{
-		Info.vecSetToActionMap.push_back(string(sActionMapName));
-		sActionMapName=*(char**)(v+=sizeof(char*));
-	}
-#endif
 	va_end(v);
 }
 
@@ -984,7 +977,13 @@ void CXGame::InitConsoleVars()
 
 	cv_game_physics_quality = pConsole->CreateVariable("physics_quality","2",VF_REQUIRE_NET_SYNC);
 
+#if defined(__vita__)
+	// This build has no audio backend at all (see CrySoundSystem/CrySoundStubs.cpp),
+	// so subtitles are the only channel cutscene and radio dialogue has left.
+	cv_game_subtitles = pConsole->CreateVariable("game_subtitles","1",0,"toggles game subtitles");
+#else
 	cv_game_subtitles = pConsole->CreateVariable("game_subtitles","0",0,"toggles game subtitles");
+#endif
 
 	pl_JumpNegativeImpulse = GetISystem()->GetIConsole()->CreateVariable("JumpNegativeImpulse","0.0f",VF_REQUIRE_NET_SYNC,
 		"this represent the downward impulse power applied when the player reach the max height of the jump, 0 means no impulse.\n"

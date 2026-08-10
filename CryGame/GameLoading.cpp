@@ -231,14 +231,27 @@ bool CXGame::SaveToStream(CStream &stm, Vec3d *pos, Vec3d *angles,string sFilena
 		pPlayerEnt=pEntitySystem->GetEntity(m_pClient->GetPlayerId());
 	//ASSERT(pPlayerEnt);
 	if (!pPlayerEnt)
+	{
 		//CryError("Saving to checkpoint - Current player not set or invalid - data error - possible reasons: \n - the first respawn point might be inside a checkpoint \n - something else other than shapes is used to trigger game events \n the trigger used to trigger checkpoint is not trigger once \n solution: check out the map and fix");
 		CryError("A checkpoint has been triggered to save data when the player is not existing yet, generally right after respawning. \n This is a data error, and must be fixed by the designer working on this map. \n Possible data errors are: \n - the first respawn point might be inside a checkpoint \n - something else other than shapes is used to trigger game events; \n - the area trigger used to trigger checkpoint is not trigger once; \n how to proceed: get the designer working on this map to fix this");
+		// Vita: CryError (CryCommon/ISystem.h) only logs -- its own comment
+		// claims "Then terminates execution" but the real body just calls
+		// ISystem::Error() and returns, so pPlayerEnt stays null here. The
+		// code below unconditionally dereferences it (pPlayerEnt->GetContainer()),
+		// a null-pointer crash confirmed the first time a checkpoint trigger
+		// fired before the player entity existed. Bail out for real instead
+		// of falling through.
+		return false;
+	}
 
 	CPlayer *pPlayer=NULL;
 	if(pPlayerEnt->GetContainer()) pPlayerEnt->GetContainer()->QueryContainerInterface(CIT_IPLAYER,(void**) &pPlayer);
 	//ASSERT(pPlayer);
 	if (!pPlayer)
+	{
 		CryError("Cannot get player container");
+		return false;
+	}
 
 	if(pPlayer->m_stats.health<=0)
 	{
@@ -362,6 +375,13 @@ bool CXGame::SaveToStream(CStream &stm, Vec3d *pos, Vec3d *angles,string sFilena
 			continue;
 
 		EntityClass *pClass = pECR->GetByClass(pEnt->GetEntityClassName());
+		// Vita: same real registry gap as LoadFromStream's entity-removal
+		// loop (GetByClass can legitimately return null for a class the
+		// registry never picked up) -- this loop dereferences pClass->ClassId
+		// unconditionally below, so skip anything we can't identify instead
+		// of crashing on it.
+		if (!pClass)
+			continue;
 		CPlayer *pPlayer = NULL;
 
 		if(pEnt->GetContainer()) pEnt->GetContainer()->QueryContainerInterface(CIT_IPLAYER,(void**) &pPlayer);
@@ -899,11 +919,19 @@ bool CXGame::LoadFromStream(CStream &stm, bool isdemo)
 		while((pEnt=pEntities->Next())!=NULL)
 		{
 			EntityClass *pClass=pECR->GetByClass(pEnt->GetEntityClassName());
-			if (m_pWeaponSystemEx->IsProjectileClass(pClass->ClassId)) continue;
+			// Vita: GetByClass can legitimately return null for an entity
+			// class the registry never picked up (a real gap in this port's
+			// entity-class registration, not something to paper over
+			// elsewhere) -- confirmed crashing the first time a real
+			// "Switch" checkpoint reload walked every live entity. Treat an
+			// unknown class as non-projectile and remove it like any other
+			// entity instead of dereferencing null.
+			if (pClass && m_pWeaponSystemEx->IsProjectileClass(pClass->ClassId)) continue;
 #ifdef _DEBUG
-			m_pLog->Log("REMOVING entity classname %s classid=%02d id=%3id ",pClass->strClassName.c_str(),(int)pClass->ClassId,pEnt->GetId());
+			if (pClass)
+				m_pLog->Log("REMOVING entity classname %s classid=%02d id=%3id ",pClass->strClassName.c_str(),(int)pClass->ClassId,pEnt->GetId());
 #endif
-			pEntitySystem->RemoveEntity(pEnt->GetId());		
+			pEntitySystem->RemoveEntity(pEnt->GetId());
 		}
 
 		pConsole->TickProgressBar();	// advance progress
@@ -1940,11 +1968,19 @@ bool CXGame::LoadFromStream_RELEASEVERSION(CStream &stm, bool isdemo, CScriptObj
 		while((pEnt=pEntities->Next())!=NULL)
 		{
 			EntityClass *pClass=pECR->GetByClass(pEnt->GetEntityClassName());
-			if (m_pWeaponSystemEx->IsProjectileClass(pClass->ClassId)) continue;
+			// Vita: GetByClass can legitimately return null for an entity
+			// class the registry never picked up (a real gap in this port's
+			// entity-class registration, not something to paper over
+			// elsewhere) -- confirmed crashing the first time a real
+			// "Switch" checkpoint reload walked every live entity. Treat an
+			// unknown class as non-projectile and remove it like any other
+			// entity instead of dereferencing null.
+			if (pClass && m_pWeaponSystemEx->IsProjectileClass(pClass->ClassId)) continue;
 #ifdef _DEBUG
-			m_pLog->Log("REMOVING entity classname %s classid=%02d id=%3id ",pClass->strClassName.c_str(),(int)pClass->ClassId,pEnt->GetId());
+			if (pClass)
+				m_pLog->Log("REMOVING entity classname %s classid=%02d id=%3id ",pClass->strClassName.c_str(),(int)pClass->ClassId,pEnt->GetId());
 #endif
-			pEntitySystem->RemoveEntity(pEnt->GetId());		
+			pEntitySystem->RemoveEntity(pEnt->GetId());
 		}
 
 		pConsole->TickProgressBar();	// advance progress
@@ -2506,11 +2542,19 @@ bool CXGame::LoadFromStream_PATCH_1(CStream &stm, bool isdemo, CScriptObjectStre
 		while((pEnt=pEntities->Next())!=NULL)
 		{
 			EntityClass *pClass=pECR->GetByClass(pEnt->GetEntityClassName());
-			if (m_pWeaponSystemEx->IsProjectileClass(pClass->ClassId)) continue;
+			// Vita: GetByClass can legitimately return null for an entity
+			// class the registry never picked up (a real gap in this port's
+			// entity-class registration, not something to paper over
+			// elsewhere) -- confirmed crashing the first time a real
+			// "Switch" checkpoint reload walked every live entity. Treat an
+			// unknown class as non-projectile and remove it like any other
+			// entity instead of dereferencing null.
+			if (pClass && m_pWeaponSystemEx->IsProjectileClass(pClass->ClassId)) continue;
 #ifdef _DEBUG
-			m_pLog->Log("REMOVING entity classname %s classid=%02d id=%3id ",pClass->strClassName.c_str(),(int)pClass->ClassId,pEnt->GetId());
+			if (pClass)
+				m_pLog->Log("REMOVING entity classname %s classid=%02d id=%3id ",pClass->strClassName.c_str(),(int)pClass->ClassId,pEnt->GetId());
 #endif
-			pEntitySystem->RemoveEntity(pEnt->GetId());		
+			pEntitySystem->RemoveEntity(pEnt->GetId());
 		}
 
 		pConsole->TickProgressBar();	// advance progress

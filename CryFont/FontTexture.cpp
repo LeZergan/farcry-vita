@@ -244,7 +244,6 @@ int CFontTexture::PreCacheString(const wchar_t *szString, int *pUpdated)
 	unsigned int dwUsage = m_dwUsage++;
 	int iLength = wcslen(szString);
 	int iUpdated = 0;
-	sceClibPrintf("[BOOTTRACE] PreCacheString entered, iLength=%d\n", iLength);
 
 	for (int i = 0; i < iLength; i++)
 	{
@@ -281,7 +280,6 @@ int CFontTexture::PreCacheString(const wchar_t *szString, int *pUpdated)
 		*pUpdated = iUpdated;
 	}
 
-	sceClibPrintf("[BOOTTRACE] PreCacheString: done, iUpdated=%d\n", iUpdated);
 	if (iUpdated)
 	{
 		return 1;

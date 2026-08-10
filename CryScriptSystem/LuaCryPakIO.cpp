@@ -9,7 +9,7 @@
 #include <ICryPak.h>
 
 //////////////////////////////////////////////////////////////////////////
-FILE	*CryPakOpen(const char *szFile,const char *szMode)
+FILE	*LuaCryPakOpen(const char *szFile,const char *szMode)
 {
 #ifdef USE_CRYPAK
 	ICryPak *pPak=GetISystem()->GetIPak();
@@ -20,7 +20,7 @@ FILE	*CryPakOpen(const char *szFile,const char *szMode)
 }
 
 //////////////////////////////////////////////////////////////////////////
-int CryPakClose(FILE *fp)
+int LuaCryPakClose(FILE *fp)
 {
 #ifdef USE_CRYPAK
 	ICryPak *pPak=GetISystem()->GetIPak();
@@ -31,7 +31,7 @@ int CryPakClose(FILE *fp)
 }
 
 //////////////////////////////////////////////////////////////////////////
-int CryPakFFlush(FILE *fp)
+int LuaCryPakFFlush(FILE *fp)
 {
 #ifdef USE_CRYPAK
   ICryPak *pPak=GetISystem()->GetIPak();
@@ -42,7 +42,7 @@ int CryPakFFlush(FILE *fp)
 }
 
 //////////////////////////////////////////////////////////////////////////
-char *CryPakFGets(char *str, int n, FILE *handle)
+char *LuaCryPakFGets(char *str, int n, FILE *handle)
 {
 #ifdef USE_CRYPAK
   ICryPak *pPak=GetISystem()->GetIPak();
@@ -53,7 +53,7 @@ char *CryPakFGets(char *str, int n, FILE *handle)
 }
 
 //////////////////////////////////////////////////////////////////////////
-int   CryPakUngetc(int c, FILE *handle)
+int   LuaCryPakUngetc(int c, FILE *handle)
 {
 #ifdef USE_CRYPAK
   ICryPak *pPak=GetISystem()->GetIPak();
@@ -64,7 +64,7 @@ int   CryPakUngetc(int c, FILE *handle)
 }
 
 //////////////////////////////////////////////////////////////////////////
-int   CryPakGetc(FILE *handle)
+int   LuaCryPakGetc(FILE *handle)
 {
 #ifdef USE_CRYPAK
   ICryPak *pPak=GetISystem()->GetIPak();
@@ -75,7 +75,7 @@ int   CryPakGetc(FILE *handle)
 }
 
 //////////////////////////////////////////////////////////////////////////
-int CryPakFScanf(FILE *handle, const char *format, ...)
+int LuaCryPakFScanf(FILE *handle, const char *format, ...)
 {
   va_list arglist;
   va_start(arglist, format);
@@ -88,7 +88,7 @@ int CryPakFScanf(FILE *handle, const char *format, ...)
 }
 
 //////////////////////////////////////////////////////////////////////////
-int CryPakFSeek(FILE *handle, long seek, int mode)
+int LuaCryPakFSeek(FILE *handle, long seek, int mode)
 {
 #ifdef USE_CRYPAK
   ICryPak *pPak=GetISystem()->GetIPak();
@@ -99,7 +99,7 @@ int CryPakFSeek(FILE *handle, long seek, int mode)
 }
 
 //////////////////////////////////////////////////////////////////////////
-int CryPakFPrintf(FILE *handle, const char *format, ...)
+int LuaCryPakFPrintf(FILE *handle, const char *format, ...)
 {
   va_list arglist;
   va_start(arglist, format);
@@ -112,7 +112,7 @@ int CryPakFPrintf(FILE *handle, const char *format, ...)
 }
 
 //////////////////////////////////////////////////////////////////////////
-size_t CryPakFRead(void *data, size_t length, size_t elems, FILE *handle)
+size_t LuaCryPakFRead(void *data, size_t length, size_t elems, FILE *handle)
 {
 #ifdef USE_CRYPAK
   ICryPak *pPak=GetISystem()->GetIPak();
@@ -123,7 +123,7 @@ size_t CryPakFRead(void *data, size_t length, size_t elems, FILE *handle)
 }
 
 //////////////////////////////////////////////////////////////////////////
-size_t CryPakFWrite(void *data, size_t length, size_t elems, FILE *handle)
+size_t LuaCryPakFWrite(void *data, size_t length, size_t elems, FILE *handle)
 {
 #ifdef USE_CRYPAK
   ICryPak *pPak=GetISystem()->GetIPak();
@@ -134,7 +134,7 @@ size_t CryPakFWrite(void *data, size_t length, size_t elems, FILE *handle)
 }
 
 //////////////////////////////////////////////////////////////////////////
-int   CryPakFEof(FILE *handle)
+int   LuaCryPakFEof(FILE *handle)
 {
 #ifdef USE_CRYPAK
   ICryPak *pPak=GetISystem()->GetIPak();

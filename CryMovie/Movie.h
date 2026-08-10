@@ -134,6 +134,17 @@ private:
 
 	typedef std::list<PlayingSequence> PlayingSequences;
 	PlayingSequences m_playingSequences;
+	/*! How many cut scenes we have told the user we began but not yet ended.
+	    CMovieUser::BeginCutScene disables the player (it switches to the
+	    "player_dead" action map and turns off physics and AI), so if a
+	    sequence ever leaves play without its matching EndCutScene the player
+	    is left permanently unable to move.  Update() watches this. */
+	int m_nOpenCutScenes;
+	/* How long a cut scene has been holding the player's controls.  There is no
+	   skip binding on this platform, so a sequence that never ends -- or one
+	   whose camera does not animate -- would otherwise leave the player staring
+	   at a frozen frame with no way out. */
+	float m_fOpenCutSceneTime;
 	
 	bool m_bRecording;
 	bool m_bPaused;

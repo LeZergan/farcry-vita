@@ -357,4 +357,13 @@ void CObjManager::DrawAllShadowsOnTheGroundInSector(list2<IEntityRender*> * pEnt
 			pEntRendState->pShadowMapInfo->pShadowMapLeafBuffersList=0;
 		}
 	}
+
+	/* This pass sets the clear colour to white above so shadows accumulate
+	   against a white page, and never puts it back -- the desktop backends
+	   rendered it into their own target, so the main framebuffer's clear was
+	   never affected.  Here it is the same framebuffer, so the leak made every
+	   subsequent frame clear to white; with no sky box drawn yet, that white
+	   was what showed through the horizon and any opening onto the sky.
+	   Restore the colour this frame actually wants. */
+	((C3DEngine*)Get3DEngine())->SetupClearColor();
 }

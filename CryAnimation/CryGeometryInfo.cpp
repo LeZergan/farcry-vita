@@ -451,7 +451,16 @@ unsigned CryGeometryInfo::Load (unsigned nLOD, const MESH_CHUNK_DESC_0744* pChun
 	nChunkSize -= sizeof(*pChunk);
 
   if(pChunk->nVerts<=0 || pChunk->nVerts>60000)
+  {
+    static int s_nReportedBadChunks = 0;
+    if (s_nReportedBadChunks < 16)
+    {
+      ++s_nReportedBadChunks;
+      g_GetLog()->LogToFile("\001[VITA][GEOM] mesh chunk rejected: nVerts=%d nFaces=%d chunkSize=%u",
+        pChunk->nVerts, pChunk->nFaces, nChunkSize);
+    }
     return 0;
+  }
 
 	PrepareVertices (pChunk->nVerts);
 	assert (pChunk->nVerts);
@@ -1143,6 +1152,14 @@ void CryGeometryInfo::exportASC (FILE* f)
 }
 
 // vlad: I placed it temporary here because of Timur chandes in rc.exe
+// Vita: this is a deliberate per-DLL duplicate of Cry3DEngine/Meshidx.cpp's
+// CIndexedMesh::~CIndexedMesh() (down to the free() calls; Meshidx.cpp's is
+// the more complete/canonical one -- it also frees m_pColorSec) -- fine
+// when CryAnimation.dll and Cry3DEngine.dll are separate binaries each
+// needing their own copy, a real multiple-definition link error once
+// everything is one static Vita binary. Guarded out here rather than
+// deleted, matching Windows behavior exactly.
+#if !defined(LINUX)
 CIndexedMesh::~CIndexedMesh()
 {
 	if(m_pFaces)
@@ -1185,3 +1202,4 @@ CIndexedMesh::~CIndexedMesh()
 	delete m_tgtLSources[i];
 	}*/
 }
+#endif

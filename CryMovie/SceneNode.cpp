@@ -380,8 +380,15 @@ void CAnimSceneNode::ApplySoundKey( IAnimTrack *pTrack,int nCurrKey,int nLayer, 
 		if (m_SoundInfo[nLayer].pSound)
 		{
 			m_SoundInfo[nLayer].nLength=m_SoundInfo[nLayer].pSound->GetLengthMs();
-			key.fDuration = ((float)m_SoundInfo[nLayer].nLength) / 1000.0f;
-			pTrack->SetKey( nCurrKey,&key ); // Update key duration.
+			// Keep the duration the sequence was authored with when the sound
+			// system cannot report a length (no audio backend, or the buffer is
+			// still loading).  Overwriting it with zero silently collapsed every
+			// dialogue key in a cutscene, taking its subtitle with it.
+			if (m_SoundInfo[nLayer].nLength > 0)
+			{
+				key.fDuration = ((float)m_SoundInfo[nLayer].nLength) / 1000.0f;
+				pTrack->SetKey( nCurrKey,&key ); // Update key duration.
+			}
 		}
 	}else
 	{

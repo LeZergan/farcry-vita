@@ -27,10 +27,9 @@ unsigned int SetFilePointer(HANDLE hFile, long lDistanceToMove, long *lpDistance
 int GetOverlappedResult(HANDLE hFile, void *lpOverlapped, unsigned int *lpNumberOfBytesTransferred, bool bWait);
 
 /* ZipDirStructures.cpp: converts a DOS-encoded zip entry timestamp to a
-   FILETIME via this Win32-style intermediate struct. */
-struct SYSTEMTIME {
-	unsigned short wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, wMilliseconds;
-};
+   FILETIME via this Win32-style intermediate struct -- struct itself now
+   defined in CryCompat.h (force-included everywhere, see SYSTEMTIME_DEFINED
+   there) since CryGame needs it with no HANDLE dependency to wait for. */
 bool SystemTimeToFileTime(const SYSTEMTIME *st, FILETIME *ft);
 
 /* ---- Real pthread-backed Win32 thread/event API for RefStreamEngine's

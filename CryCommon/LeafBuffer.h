@@ -268,6 +268,18 @@ struct CLeafBuffer
   uint                    m_UpdateFrame;
   uint                    m_SortFrame;								//!< to prevent unneccessary sorting during one frame
   int											m_SecVertCount;							//!< number of vertices in m_pSecVertBuffer
+#if defined(LINUX)
+  /* Baked lightmap UVs are stored one per *unwelded triangle corner*, in the
+     order the desktop buffer builder emitted them (material-major, then face,
+     then corner -- its buff_vert_count++).  The Vita builder welds vertices
+     that share position/normal/UV/material, so its vertex count is smaller and
+     the two cannot be indexed against each other directly; that mismatch is
+     why every lightmapped brush used to be rejected outright.  Record the
+     corner count and, for each welded vertex, the corner it first came from,
+     so CBrush::SetLightmap can resample the UVs into Vita vertex order. */
+  int											m_nLMCornerCount;						//!< unwelded corner count (desktop vertex numbering)
+  std::vector<int>				m_arrLMCornerOfVertex;			//!< per welded vertex, its first source corner
+#endif
   CVertexBuffer *					m_pSecVertBuffer;						//!< system memory
 
   SVertexStream           m_Indices;

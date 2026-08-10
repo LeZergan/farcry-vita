@@ -21,7 +21,11 @@
 
 #if defined(LINUX)
 #undef assert
+#if defined(VITA_DEBUG_AUTOLOAD_TRAINING)
+#define assert(exp) (void)( (exp) || (printf("Assert: %s:%d: ' %s ' has failed\n", __FILE__, __LINE__, #exp), 0) )
+#else
 #define assert(exp) (void)( (exp) || (printf("Assert: ' %s ' has failed\n", #exp), 0) )
+#endif
 #endif
 
 

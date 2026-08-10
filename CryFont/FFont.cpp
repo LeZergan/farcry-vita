@@ -412,14 +412,12 @@ _inline DWORD COLCONV (DWORD clr)
 
 void CFFont::DrawString( float fBaseX, float fBaseY, const char *szMsg, const bool bASCIIMultiLine )
 {
-	sceClibPrintf("[BOOTTRACE] CFFont::DrawString entered, this=%p szMsg=%p content=[%s]\n", (void*)this, (void*)szMsg, szMsg ? szMsg : "(null)");
 	if (!szMsg)
 	{
 		return;
 	}
 
 	int iSize = min(1023, strlen(szMsg));
-	sceClibPrintf("[BOOTTRACE] CFFont::DrawString: iSize=%d strlen=%d\n", iSize, (int)strlen(szMsg));
 
 	static wchar_t szwMsg[1024];
 
@@ -428,10 +426,7 @@ void CFFont::DrawString( float fBaseX, float fBaseY, const char *szMsg, const bo
 	{
 		szwMsg[iSize] = (unsigned char)szMsg[iSize];
 	}
-	sceClibPrintf("[BOOTTRACE] CFFont::DrawString: before DrawStringW\n");
-
 	DrawStringW(fBaseX, fBaseY, szwMsg, bASCIIMultiLine);
-	sceClibPrintf("[BOOTTRACE] CFFont::DrawString: after DrawStringW\n");
 }
 
 void CFFont::DrawStringW(float fBaseX, float fBaseY, const wchar_t *szMsg, const bool bASCIIMultiLine)
@@ -441,9 +436,7 @@ void CFFont::DrawStringW(float fBaseX, float fBaseY, const wchar_t *szMsg, const
 	// and will allocate two buffers
 	//assert(wcslen(szMsg) <= 682);
 
-	sceClibPrintf("[BOOTTRACE] CFFont::DrawStringW entered, this=%p m_pISystem=%p\n", (void*)this, (void*)m_pISystem);
 	IRenderer *pRenderer = m_pISystem->GetIRenderer();
-	sceClibPrintf("[BOOTTRACE] CFFont::DrawStringW: pRenderer=%p\n", (void*)pRenderer);
 	assert(pRenderer);
 
 	if (!szMsg)
@@ -451,17 +444,20 @@ void CFFont::DrawStringW(float fBaseX, float fBaseY, const wchar_t *szMsg, const
 		return;
 	}
 
-	sceClibPrintf("[BOOTTRACE] CFFont::DrawStringW: before Prepare\n");
 	Prepare(szMsg);
-	sceClibPrintf("[BOOTTRACE] CFFont::DrawStringW: after Prepare, m_pCurrentEffect=%p\n", (void*)m_pCurrentEffect);
 
 	float fTexHeight = m_pFontTexture.GetCellHeight() / (float)m_pFontTexture.GetHeight();
-	sceClibPrintf("[BOOTTRACE] CFFont::DrawStringW: fTexHeight=%f\n", fTexHeight);
 	bool	bRGB = (pRenderer->GetFeatures() & RFT_RGBA) != 0;
 	float fAlpha = m_pCurrentEffect->vPass[0].cColor.v[3];
 	struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F *pVertex = 0;
 	int		iVertexOffset = 0;
 	int		iTextLength = GetTextLengthW(szMsg);
+	/* Empty UI labels are legitimate (the HUD uses them to hide individual
+	   fields).  The desktop dynamic-VB allocator tolerated a zero-sized lock,
+	   while the Vita ring correctly returns null; avoid asserting and touching
+	   a null vertex pointer when there is simply nothing to draw. */
+	if (iTextLength <= 0)
+		return;
 
 	pRenderer->FontSetTexture(m_iTextureID, FILTER_TRILINEAR);
 	pRenderer->FontSetRenderingState(0, 0);

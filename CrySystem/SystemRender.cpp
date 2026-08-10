@@ -913,6 +913,30 @@ void CSystem::UpdateLoadingScreen()
 	{
 		if ((intptr_t)GetIRenderer()->EF_Query(EFQ_RecurseLevel) <= 0)
 		{
+#if defined(__vita__)
+			/* Only drive the loading screen while a load is actually on screen.
+			   Every log line calls in here and this presents a whole frame with
+			   the console over the top of it, so once the game was running and
+			   streamed an asset in, the player got a full-screen flash of asset
+			   names over the scene -- which looks exactly like a cut scene
+			   failing to play.  The console is scrolled down for the duration of
+			   a level load (CXGame::LoadLevelCS) and closed again afterwards, so
+			   that state is the honest "a load is in progress" signal. */
+			if (!GetIConsole()->GetStatus())
+				return;
+
+			/* A level emits thousands of log lines, so the original contract is
+			   "present a whole frame per asset name".  On Vita that meant several
+			   thousand full clears and swaps, the text strobing far too fast to
+			   read and a large slice of the load time spent presenting frames
+			   nobody can follow.  Cap it at 15 Hz; the log still receives every
+			   line. */
+			const float fNow = m_Time.GetAsyncCurTime();
+			static float s_fLastLoadingDraw = 0.0f;
+			if (fNow >= s_fLastLoadingDraw && fNow - s_fLastLoadingDraw < 1.0f / 15.0f)
+				return;
+			s_fLastLoadingDraw = fNow;
+#endif
 			RenderBegin();
 			GetIConsole()->Draw();
 			RenderEnd();

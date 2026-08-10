@@ -89,7 +89,10 @@ const Vec3d & CBrush::GetPos(bool bWorldOnly) const
 
 const Vec3d & CBrush::GetAngles(int realA) const
 {
-	assert(0);
+	// This accessor is used routinely while loading and registering brushes.
+	// The original debug-only assert was unconditional even though returning
+	// m_vAngles is the intended implementation; on Vita it flooded the debug
+	// channel millions of times and made level loading dramatically slower.
 	return m_vAngles;
 }
 
@@ -950,12 +953,38 @@ void CObjManager::MergeBrushes()
 
           lstVerts.Add(vert);
 
-          // add tbasis
-          SPipTangents basis;
-          basis.m_Tangent = mat.TransformVectorOLD(*(Vec3d*)&pTang[nTangStride*v]);
-          basis.m_TNormal = mat.TransformVectorOLD(*(Vec3d*)&pTNorm[nTnormStride*v]);
-          basis.m_Binormal= mat.TransformVectorOLD(*(Vec3d*)&pBNorm[nBNormStride*v]);
-          lstTangBasises.Add(basis);
+		  // add tbasis
+		  SPipTangents basis;
+		  if (pTang && pTNorm && pBNorm)
+		  {
+			basis.m_Tangent = mat.TransformVectorOLD(*(Vec3d*)&pTang[nTangStride*v]);
+			basis.m_TNormal = mat.TransformVectorOLD(*(Vec3d*)&pTNorm[nTnormStride*v]);
+			basis.m_Binormal= mat.TransformVectorOLD(*(Vec3d*)&pBNorm[nBNormStride*v]);
+		  }
+		  else
+		  {
+			/* The Vita fixed-function renderer deliberately omits persistent
+			   tangent streams for static meshes. Brush merging still needs a
+			   valid basis object, so derive one from the real transformed normal
+			   without paying 36 extra bytes for every source vertex. */
+			Vec3d n = vert.normal;
+			float nLen2 = n.x*n.x + n.y*n.y + n.z*n.z;
+			if (nLen2 > 1.0e-12f)
+			  n *= 1.0f / sqrtf(nLen2);
+			else
+			  n.Set(0, 0, 1);
+			Vec3d tangent = fabsf(n.z) < 0.999f ? Vec3d(-n.y, n.x, 0) : Vec3d(1, 0, 0);
+			float tLen2 = tangent.x*tangent.x + tangent.y*tangent.y + tangent.z*tangent.z;
+			if (tLen2 > 1.0e-12f)
+			  tangent *= 1.0f / sqrtf(tLen2);
+			basis.m_Tangent = tangent;
+			basis.m_TNormal = n;
+			basis.m_Binormal.Set(
+			  n.y*tangent.z - n.z*tangent.y,
+			  n.z*tangent.x - n.x*tangent.z,
+			  n.x*tangent.y - n.y*tangent.x);
+		  }
+		  lstTangBasises.Add(basis);
 
           // add LM texcoords
           LMTexCoord vLMTC;

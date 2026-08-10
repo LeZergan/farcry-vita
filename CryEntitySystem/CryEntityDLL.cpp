@@ -26,7 +26,14 @@ static ISystem* gISystem = 0;
    the full explanation. */
 
 // Local var to turn on/off profiler.
+/* Vita: real definition lives in CrySystem/FrameProfileSystem.cpp -- fine
+   as separate per-DLL copies on Windows, a real multiple-definition link
+   error once CryEntitySystem and CrySystem are part of one static Vita
+   binary. EntitySystem.cpp's `extern bool g_bProfilerEnabled` (see
+   CryEntitySystem/stdafx.h) resolves to that one real definition instead. */
+#if !defined(LINUX)
 bool g_bProfilerEnabled = false;
+#endif
 //////////////////////////////////////////////////////////////////////////
 
 #if !defined(_XBOX)

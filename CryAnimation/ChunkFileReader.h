@@ -85,6 +85,19 @@ protected:
 	ChunkSizeArray m_arrChunkSize;
 	// pointer to the array of chunks in the m_pFile
 	const ChunkHeader* m_pChunks;
+
+#if defined(LINUX)
+	/* Chunks start wherever the file says they do, and CGF/CCG files happily
+	   place them on odd byte offsets.  x86 read unaligned floats without
+	   complaining; the VFP unit does not -- a vldr off a misaligned address is
+	   a data abort, which is what killed character material loading on real
+	   hardware while running fine under emulation.  Hand out an aligned copy
+	   of any chunk the file placed off a 4-byte boundary; aligned chunks (the
+	   overwhelming majority) still point straight into the file image. */
+	const void* getAlignedChunk(int nChunkIdx, const void* pChunkData) const;
+	void freeAlignedChunks();
+	mutable std::vector<void*> m_arrAlignedChunk;
+#endif
 };
 
 TYPEDEF_AUTOPTR(CChunkFileReader);

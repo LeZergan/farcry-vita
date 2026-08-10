@@ -141,12 +141,10 @@ typedef ActionNamesMap::iterator ActionNamesMapItor;
 typedef std::map<string,CXActionMap *> ActionMapMap;
 typedef ActionMapMap::iterator ActionMapMapItor;
 
-class CInput;
-
 class CXActionMapManager : public IActionMapManager,public IInputEventListener
 {
 public:
-	CXActionMapManager(CInput *pInput);
+	CXActionMapManager(IInput *pInput);
 	virtual ~CXActionMapManager();
 public:
 //!IActionMapManager
@@ -163,6 +161,12 @@ public:
 	void ResetAllBindings();
 
 	void SetActionMap(const char *s);
+
+	//! Name of the action map currently in effect ("default", "vehicle",
+	//! "player_dead"), or "" before the first SetActionMap.  The Vita input
+	//! backend needs this to keep its analog walk modifier off while driving,
+	//! where the same ACTION_WALK means "brake".
+	const char *GetCurrentActionMapName() const { return m_sCurrentActionMap.c_str(); }
 
 	void GetActionMaps(IActionMapDumpSink *pCallback);
 
@@ -198,13 +202,14 @@ public:
 	//////////////////////////////////////////////////////////////////////////
 	virtual bool OnInputEvent( const SInputEvent &event );
 
-	CInput *m_pInput;
+	IInput *m_pInput;
 private:
 	
 	ActionIDsMap m_mapActionIDs;
 	ActionNamesMap m_mapActionNames;
 	ActionMapMap m_mapActionMaps;
 	CXActionMap *m_pCurrentActionMap;
+	std::string m_sCurrentActionMap;
 	IActionMapSink *m_pSink;
 	unsigned int m_nCurrentTime;
 	bool m_bInvertedMouse;

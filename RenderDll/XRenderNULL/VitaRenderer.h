@@ -17,20 +17,25 @@
 #ifndef VITA_RENDERER_H
 #define VITA_RENDERER_H
 
+#include <map>
+#include <string>
+#include <vector>
+
 #if _MSC_VER > 1000
 # pragma once
 #endif
 
-/* Vita: real ITexPic backed by a real vitaGL texture and real decoded
-   pixel data (see CVitaRenderer::EF_LoadTexture -- currently BMP only,
-   the format the real Far Cry install's fcsplash.bmp actually uses).
+/* Vita: real ITexPic backed by a real vitaGL texture. Uncompressed source
+   pixels remain available where CryEngine needs GetData32(); BC1/2/3 DDS
+   data stays compressed in CDRAM and has no redundant CPU-side RGBA copy.
    No fabricated content: GetData32/GetTextureID/GetWidth/GetHeight all
    reflect the actual decoded file. */
 class CVitaTexPic : public ITexPic
 {
 public:
-	CVitaTexPic(const char *pName, int nGLTexId, int nWidth, int nHeight, byte *pRGBA32)
-		: m_nRefs(1), m_nGLTexId(nGLTexId), m_nWidth(nWidth), m_nHeight(nHeight), m_pRGBA32(pRGBA32)
+	CVitaTexPic(const char *pName, int nGLTexId, int nWidth, int nHeight, byte *pRGBA32, int nFlags, int nFlags2)
+		: m_nRefs(1), m_nGLTexId(nGLTexId), m_nWidth(nWidth), m_nHeight(nHeight),
+		  m_nFlags(nFlags), m_nFlags2(nFlags2), m_pRGBA32(pRGBA32)
 	{
 		strncpy(m_szName, pName ? pName : "", sizeof(m_szName)-1);
 		m_szName[sizeof(m_szName)-1] = 0;
@@ -43,8 +48,8 @@ public:
 	virtual int GetOriginalWidth() { return m_nWidth; }
 	virtual int GetOriginalHeight() { return m_nHeight; }
 	virtual int GetTextureID() { return m_nGLTexId; }
-	virtual int GetFlags() { return 0; }
-	virtual int GetFlags2() { return 0; }
+	virtual int GetFlags() { return m_nFlags; }
+	virtual int GetFlags2() { return m_nFlags2; }
 	virtual void SetClamp(bool bEnable) { }
 	virtual bool IsTextureLoaded() { return m_nGLTexId > 0; }
 	virtual void PrecacheAsynchronously(float fDist, int Flags) { }
@@ -56,11 +61,15 @@ private:
 	int m_nRefs;
 	int m_nGLTexId;
 	int m_nWidth, m_nHeight;
+	int m_nFlags, m_nFlags2;
 	byte *m_pRGBA32; // owned, decoded RGBA8888 pixels; freed in ~CVitaTexPic
 	char m_szName[256];
 public:
 	~CVitaTexPic();
 };
+
+class CVitaShader;
+extern class CVitaRenderer *gcpVitaRenderer;
 
 class CVitaRenderer : public IRenderer
 {
@@ -284,6 +293,9 @@ public:
 	virtual bool SetRenderTarget(int nHandle);
 	virtual float EF_GetWaterZElevation(float fX, float fY);
 
+	// Called by CVitaTexPic when an external Release destroys a texture.
+	void UnregisterTexture(CVitaTexPic *pTexture);
+
 private:
 	int m_nWidth;
 	int m_nHeight;
@@ -291,6 +303,13 @@ private:
 	int m_nDepthBpp;
 	int m_nStencilBpp;
 	char m_cType;
+	int m_nViewportX;
+	int m_nViewportY;
+	int m_nViewportWidth;
+	int m_nViewportHeight;
+	int m_nFrameId;
+	Vec3 m_vClearColor;
+	int m_nActiveLights;
 
 	// Backing store for GetDynVBPtr/DrawDynVB -- CFFont::DrawStringW (see
 	// CryFont/FFont.cpp) fills this via GetDynVBPtr and submits it via
@@ -298,6 +317,81 @@ private:
 	static const int DYNVB_CAPACITY = 16384;
 	struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F m_DynVB[DYNVB_CAPACITY];
 	int m_nDynVBCursor;
+
+	// Vita: real 3D draw state -- see SetCamera/PushMatrix/etc and
+	// DrawBuffer in VitaRenderer.cpp.
+	CCamera m_Camera;
+	int m_nCullMode;
+	std::map<int, CVitaTexPic *> m_TextureById;
+public:
+	//! True once a texture name has been searched for and proven absent.
+	//! Lets the draw paths tell "not loaded yet" apart from "will never load".
+	bool IsTextureKnownMissing(const char *szName);
+private:
+	std::map<std::string, CVitaTexPic *> m_TextureByName;
+	/* Textures already proven absent.  Without this, every material that names
+	   a missing texture re-runs the whole candidate-path search and its failed
+	   CryPak opens on every draw, every frame, for the life of the level. */
+	std::set<std::string> m_FailedTextureNames;
+	std::map<std::string, CVitaShader *> m_ShaderByName;
+	int m_nNextShaderId;
+
+	// CryEngine builds per-draw CCObjects through EF_GetObject.  Reuse the
+	// temporary pool every EF_StartEf instead of allocating thousands of
+	// 256-byte objects per frame on Vita's CPU heap.
+	std::vector<CCObject *> m_TempRenderObjects;
+	std::vector<CCObject *> m_PermanentRenderObjects;
+	size_t m_nTempRenderObjectCursor;
 };
+
+/* Far Cry's cut-out transparency lives in the shader template, not in the
+   material's alpha reference: a leaf card is "TemplPlants1" with m_AlphaRef 0,
+   and the real backends knew from the template that it needs an alpha test.
+   Without that, every leaf, frond, grass blade, chain-link fence and decal
+   draws as a solid rectangle of its texture including the parts meant to be
+   invisible -- which is what "the transparencies are broken" looks like.
+   Recognise those templates by name so the fixed-function alpha test can do
+   the job the missing shader would have.
+
+   "no_draw" is Crytek's explicitly non-rendering material (collision-only
+   proxies and similar); it has no texture at all, so on this port it fell
+   through to the white fallback and drew solid white boxes in the world. */
+namespace VitaMaterial
+{
+	inline bool NameContains(const char *haystack, const char *needle)
+	{
+		if (!haystack || !needle)
+			return false;
+		const size_t hLen = strlen(haystack), nLen = strlen(needle);
+		if (nLen > hLen)
+			return false;
+		for (size_t i = 0; i + nLen <= hLen; ++i)
+			if (strnicmp(haystack + i, needle, nLen) == 0)
+				return true;
+		return false;
+	}
+
+	//! Material that must not be rendered at all.
+	inline bool IsNoDraw(const char *shaderName)
+	{
+		return NameContains(shaderName, "no_draw") || NameContains(shaderName, "nodraw");
+	}
+
+	//! Shader templates whose geometry is alpha-cut-out foliage or similar.
+	inline bool NeedsAlphaTest(const char *shaderName)
+	{
+		if (!shaderName || !shaderName[0])
+			return false;
+		static const char *kCutoutTemplates[] = {
+			"plant", "leaf", "leaves", "grass", "tree", "veget", "bush", "frond",
+			"palm", "fence", "wire", "net", "grid", "ladder", "decal", "alphatest",
+			"cloud", "corona", "flare", "hair", "detailbend"
+		};
+		for (size_t i = 0; i < sizeof(kCutoutTemplates) / sizeof(kCutoutTemplates[0]); ++i)
+			if (NameContains(shaderName, kCutoutTemplates[i]))
+				return true;
+		return false;
+	}
+}
 
 #endif // VITA_RENDERER_H

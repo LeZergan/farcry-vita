@@ -622,6 +622,23 @@ DWORD CLMSerializationManager2::GetHashValue( const int iniGLM_ID_UsingTexCoord 
 	return(0x12341234);		// object not found
 }
 
+// Vita: EF_LoadTexture can genuinely fail (real, honest failure -- no
+// fabricated texture is returned; see CVitaRenderer::EF_LoadTexture's own
+// comment in RenderDll/XRenderNULL/VitaRenderer.cpp), but this whole
+// function calls ->GetTextureID() on its result unconditionally in several
+// places -- a real crash risk this file's own quality==2 branch already
+// guards against in its first call (the `if (tp && tp->IsTextureLoaded())`
+// below) but not its later ones. Small helper so every call site gets the
+// same guard.
+static int SafeGetTextureID(IRenderer *pIRenderer, const char *szPath, uint flags, uint flags2, byte eTT)
+{
+	ITexPic *tp = pIRenderer->EF_LoadTexture(szPath, flags, flags2, eTT);
+	int nId = (tp && tp->IsTextureLoaded()) ? tp->GetTextureID() : 0;
+	if (!nId)
+		SAFE_RELEASE(tp);
+	return nId;
+}
+
 RenderLMData * CLMSerializationManager2::CreateLightmap(const string& strDirPath, int nItem, UINT iWidth, UINT iHeight, const bool cbLoadHDRMaps, const bool cbLoadOcclMaps)
 {
 	// ---------------------------------------------------------------------------------------------
@@ -631,6 +648,23 @@ RenderLMData * CLMSerializationManager2::CreateLightmap(const string& strDirPath
 	IRenderer *pIRenderer = GetSystem()->GetIRenderer();
 	int iColorLerpTex = 0, iHDRColorLerpTex = 0, iDomDirectionTex = 0, iOcclTex = 0;
 
+#if defined(__vita__)
+	/* The compact Vita renderer currently submits one base-texture pass and
+	   does not sample RenderLMData or the per-instance LM coordinate stream.
+	   Loading every 512x512 color/direction pair therefore consumed tens of
+	   MiB of CDRAM for data that could never affect a pixel.  Vita3K also
+	   aborts in its host texture path after the fifth pair.  Keep parsing the
+	   retail Dot3LM.dat and preserve its object mapping, but represent the
+	   deliberately disabled lightmap pass with an empty resource object. */
+	(void)strDirPath;
+	(void)nItem;
+	(void)iWidth;
+	(void)iHeight;
+	(void)cbLoadHDRMaps;
+	(void)cbLoadOcclMaps;
+	return new RenderLMData(pIRenderer, 0, 0, 0, 0);
+#endif
+
   int nGPU = pIRenderer->GetFeatures() & RFT_HW_MASK;
 	char szPostfix[8];
 	sprintf(szPostfix, "%d.dds", nItem);
@@ -639,44 +673,33 @@ RenderLMData * CLMSerializationManager2::CreateLightmap(const string& strDirPath
 	//---------------------------------------------------------------------------------------------------
 	if (GetCVars()->e_light_maps_quality==0 || nGPU == RFT_HW_GF2)
 	{
-		ITexPic *tp = pIRenderer->EF_LoadTexture((strDirPath + "\\x" + szPostfix).c_str(), FT_LM, FT2_NOANISO, eTT_Base);
-		iColorLerpTex = tp->GetTextureID();
+		iColorLerpTex = SafeGetTextureID(pIRenderer, (strDirPath + "\\x" + szPostfix).c_str(), FT_LM, FT2_NOANISO, eTT_Base);
 		return new RenderLMData(pIRenderer, iColorLerpTex, iHDRColorLerpTex, 0);
 	}
   else
 	if (GetCVars()->e_light_maps_quality==1)
 	{
 		//load lightsmaps in DXT3-format
-		iColorLerpTex = pIRenderer->EF_LoadTexture((strDirPath + "\\c" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base)->GetTextureID();
-		iDomDirectionTex = pIRenderer->EF_LoadTexture((strDirPath + "\\d" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base)->GetTextureID();
+		iColorLerpTex = SafeGetTextureID(pIRenderer, (strDirPath + "\\c" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base);
+		iDomDirectionTex = SafeGetTextureID(pIRenderer, (strDirPath + "\\d" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base);
 	}
   else
 	if (GetCVars()->e_light_maps_quality==2)
 	{
-
 		//load lightmaps with high quality
-		ITexPic *tp = pIRenderer->EF_LoadTexture((strDirPath + "\\h" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base);
-		if (tp && tp->IsTextureLoaded())
-			iColorLerpTex = tp->GetTextureID();
-		else
-		{
-			SAFE_RELEASE(tp);
-			iColorLerpTex = pIRenderer->EF_LoadTexture((strDirPath + "\\c" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base)->GetTextureID();
-		}
-		iDomDirectionTex = pIRenderer->EF_LoadTexture((strDirPath + "\\d" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base)->GetTextureID();
+		iColorLerpTex = SafeGetTextureID(pIRenderer, (strDirPath + "\\h" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base);
+		if (!iColorLerpTex)
+			iColorLerpTex = SafeGetTextureID(pIRenderer, (strDirPath + "\\c" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base);
+		iDomDirectionTex = SafeGetTextureID(pIRenderer, (strDirPath + "\\d" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base);
 		if(cbLoadOcclMaps)
 		{
-			iOcclTex = pIRenderer->EF_LoadTexture((strDirPath + "\\o" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base)->GetTextureID();
+			iOcclTex = SafeGetTextureID(pIRenderer, (strDirPath + "\\o" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base);
 		}
     if ((pIRenderer->GetFeatures() & RFT_HW_HDR) && cbLoadHDRMaps)
     {
-		  ITexPic *tp = pIRenderer->EF_LoadTexture((strDirPath + "\\r" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base);
-		  if (tp && tp->IsTextureLoaded())
-			  iHDRColorLerpTex = tp->GetTextureID();
-      else
-  			SAFE_RELEASE(tp);
+			iHDRColorLerpTex = SafeGetTextureID(pIRenderer, (strDirPath + "\\r" + szPostfix).c_str(), FT_LM | FT_CLAMP, FT2_NOANISO, eTT_Base);
     }
-	} 
+	}
 	return new RenderLMData(pIRenderer, iColorLerpTex, iHDRColorLerpTex, iDomDirectionTex, iOcclTex);
 }
 

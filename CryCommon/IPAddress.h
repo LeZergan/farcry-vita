@@ -120,8 +120,9 @@ public:
 			struct hostent *pHostEntry;
 			pHostEntry = gethostbyname(sAddress);
 
-			if(pHostEntry)
-				m_Address.ADDR = *(unsigned int *)pHostEntry->h_addr_list[0];
+			if(pHostEntry && pHostEntry->h_addr_list && pHostEntry->h_addr_list[0] &&
+				pHostEntry->h_length >= (int)sizeof(unsigned int))
+				memcpy(&m_Address.ADDR, pHostEntry->h_addr_list[0], sizeof(unsigned int));
 			else
 				m_Address.ADDR = 0;
 		}
