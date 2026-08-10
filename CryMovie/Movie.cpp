@@ -531,7 +531,23 @@ void CMovieSystem::PlayOnLoadSequences()
 void CMovieSystem::Update( float dt )
 {
 	if (m_bPaused)
+	{
+#if defined(__vita__)
+		/* A paused movie system with sequences still in m_playingSequences is
+		   the signature of a cut scene that can never end: its clock is frozen,
+		   so it never reaches the end of its range and never releases the camera
+		   or the controls.  Say so rather than leaving it to be inferred. */
+		if (!m_playingSequences.empty())
+		{
+			static unsigned s_nPausedReport = 0;
+			if ((s_nPausedReport++ % 120) == 0 && m_system && m_system->GetILog())
+				m_system->GetILog()->LogToFile(
+					"\001[VITA][MOVIE] paused with %u sequence(s) still playing -- their time is frozen",
+					(unsigned)m_playingSequences.size());
+		}
+#endif
 		return;
+	}
 
 	SAnimContext ac;
 	float fps = 60;

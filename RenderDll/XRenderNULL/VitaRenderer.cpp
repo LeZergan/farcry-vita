@@ -1295,11 +1295,13 @@ void CVitaRenderer::DrawBuffer(CVertexBuffer * src, SVertexStream * indicies, in
 	// (a 2.5s run produced 94K log lines here). The draw path itself is
 	// long since confirmed correct (glGetError()==0 verified extensively
 	// already); throttle this to an occasional sample instead of every call.
-	static int s_nDrawCalls = 0;
-	const bool bTrace = ((++s_nDrawCalls % 512) == 0);
-	if (bTrace)
-		sceClibPrintf("[BOOTTRACE] DrawBuffer: call#%d fmt=%d numindices=%d offsindex=%d prmode=%d vert_start=%d vert_stop=%d\n",
-			s_nDrawCalls, src->m_vertexformat, numindices, offsindex, prmode, vert_start, vert_stop);
+	/* The sampled draw trace is gone.  Throttling it to every 512th call still
+	   fires several times a second at a normal draw count, sceClibPrintf is a
+	   synchronous debug write, and the companion trace after glDrawElements
+	   called glGetError() -- which forces the driver to finish outstanding work
+	   before it can answer.  A pipeline stall several times a second is a real
+	   cost, and the draw path it was watching is long since confirmed. */
+	const bool bTrace = false;
 	/* Prefer real buffer objects; fall back to the client pointers for dynamic
 	   or small meshes, and for anything past the upload budget. */
 	/* Only formats with no coordinates of their own need them synthesised, and
@@ -1359,8 +1361,6 @@ void CVitaRenderer::DrawBuffer(CVertexBuffer * src, SVertexStream * indicies, in
 		}
 	}
 	glDrawElements(PrimTypeToGL(prmode), numindices, GL_UNSIGNED_SHORT, pInds + offsindex);
-	if (bTrace)
-		sceClibPrintf("[BOOTTRACE] DrawBuffer: after glDrawElements err=%d viewport w=%d h=%d\n", glGetError(), m_nWidth, m_nHeight);
 	TeardownVertexArrays();
 #endif
 }

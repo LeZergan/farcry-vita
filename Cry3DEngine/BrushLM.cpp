@@ -75,6 +75,12 @@ void CBrush::SetLightmap(RenderLMData *pLMData, float *pTexCoords, UINT iNumTexC
 	// Set a referenece of a DOT3 Lightmap object for this GLM
 	// ---------------------------------------------------------------------------------------------
 
+	/* This used to bail out on Vita because CVitaRenderer had no lightmap
+	   stage, which meant no brush ever kept its RenderLMData or its lightmap
+	   texture coordinates -- and with those thrown away the world had no baked
+	   lighting at all, only the flat diffuse texture.  CVitaRenderer::EF_AddEf
+	   now binds the colour/lerp lightmap on texture unit 1 (see r_lightmaps),
+	   so the data is worth keeping. */
 	IRenderer *pIRenderer = GetRenderer();
 
 	assert(iNumTexCoords);
@@ -111,15 +117,52 @@ void CBrush::SetLightmap(RenderLMData *pLMData, float *pTexCoords, UINT iNumTexC
 		vTexCoord2.push_back(pTexCoords[i * 2 + 1]); // T
 	}
 
-	if (pLeafBuffer->m_SecVertCount != iNumTexCoords)
+#if defined(LINUX)
+	/* The baked UVs are one per unwelded triangle corner, which is what the
+	   desktop vertex buffer held.  The Vita builder welds shared corners, so
+	   its vertex count is smaller -- resample the UVs through the corner map
+	   it recorded rather than rejecting the brush, which is what left every
+	   lightmapped object in the level unlit. */
+	if (pLeafBuffer->m_SecVertCount != (int)iNumTexCoords &&
+		pLeafBuffer->m_nLMCornerCount == (int)iNumTexCoords &&
+		(int)pLeafBuffer->m_arrLMCornerOfVertex.size() == pLeafBuffer->m_SecVertCount)
 	{
-		char szBuffer[1024];
-		sprintf(szBuffer, "Error: CBrush::SetLightmap: Object at position (%f, %f, %f) has" \
-			" texture mismatch (%i coordinates supplied, %i required)\r\n",
-			GetPos().x, GetPos().y, GetPos().z, 
-			iNumTexCoords, pLeafBuffer->m_SecVertCount);
-		Warning(0,pIStatObj->GetFileName(),szBuffer);
-		// assert(pLeafBuffer->m_SecVertCount == iNumTexCoords);
+		std::vector<float> vResampled;
+		vResampled.reserve(pLeafBuffer->m_SecVertCount * 2);
+		for (int nVert = 0; nVert < pLeafBuffer->m_SecVertCount; ++nVert)
+		{
+			const int nCorner = pLeafBuffer->m_arrLMCornerOfVertex[nVert];
+			if (nCorner < 0 || nCorner >= (int)iNumTexCoords)
+			{
+				vResampled.clear();
+				break;
+			}
+			vResampled.push_back(pTexCoords[nCorner * 2 + 0]);
+			vResampled.push_back(pTexCoords[nCorner * 2 + 1]);
+		}
+		if (!vResampled.empty())
+			vTexCoord2.swap(vResampled);
+	}
+#endif
+
+	if (pLeafBuffer->m_SecVertCount != (int)(vTexCoord2.size() / 2))
+	{
+		/* One line per affected brush drowns the load log -- and every one of
+		   these is the same finding repeated: this object's lightmap has fewer
+		   corners than the leaf buffer has vertices, so it renders unlit.  Keep
+		   the first few with their full detail, then report periodically with a
+		   running total, which is the part that actually matters. */
+		static int s_nLMMismatchCount = 0;
+		++s_nLMMismatchCount;
+		if (s_nLMMismatchCount <= 5 || (s_nLMMismatchCount % 250) == 0)
+		{
+			char szBuffer[1024];
+			sprintf(szBuffer, "Error: CBrush::SetLightmap: Object at position (%f, %f, %f) has" \
+				" texture mismatch (%i coordinates supplied, %i required) [%d objects unlit so far]\r\n",
+				GetPos().x, GetPos().y, GetPos().z,
+				iNumTexCoords, pLeafBuffer->m_SecVertCount, s_nLMMismatchCount);
+			Warning(0,pIStatObj->GetFileName(),szBuffer);
+		}
 		return;
 	}
 

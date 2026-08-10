@@ -922,7 +922,15 @@ bool CXGame::Update()
 	bool bPause=IsInPause(pProcess);
 	if (m_bIsLoadingLevelFromFile)
 		bPause=false;
-#if !defined(LINUX)	
+	/* This was excluded on LINUX, which left nothing on this platform able to
+	   take the movie system out of its paused state.  CMovieSystem::Update
+	   returns immediately while paused, so a paused movie system means sequence
+	   time never advances -- and a cut scene whose time never advances never
+	   reaches the end of its range, never stops, and never hands the camera and
+	   the controls back.  That is the "cut scenes do not end unless I press X"
+	   behaviour: pressing X was ending them by hand.
+	   Nothing about pausing the movie system with the game is platform
+	   specific, so restore it everywhere. */
 	// Pauses or unpauses movie system.
 	if (bPause != m_bMovieSystemPaused)
 	{
@@ -932,7 +940,6 @@ bool CXGame::Update()
 		else
 			m_pSystem->GetIMovieSystem()->Resume();
 	}
-#endif
 	// [marco] check current sound and vis areas
 	// for music etc.
 	CheckSoundVisAreas();

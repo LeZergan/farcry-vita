@@ -24,30 +24,11 @@ void CSectorInfo::DrawArray(CArrayInfo * pArrayInfo, CCObject * pTerrainCCObject
 {
 	bool bAllowSingePassZ(GetViewCamera().GetFov() < GetCVars()->e_detail_texture_min_fov);
 
-#if defined(LINUX)
-	/* Terrain draws white when nothing ever binds a sector texture.  Every one
-	   of the four conditions below silently skips the bind, and the leaf buffer
-	   then keeps the id it was created with -- which is the 0x1000 placeholder
-	   UpdateVarBuffer passes while m_nTextureID is still zero.  Report the
-	   whole guard once a second for one sector so it is clear which term fails. */
-	{
-		/* Frame-counted, not deadline-based: GetCurTimeSec() is reset by the
-		   level load, which strands any "report again at now+1s" latch. */
-		static unsigned s_nTerrainReportCounter = 0;
-		if ((s_nTerrainReportCounter++ % 240) == 0)
-		{
-			GetLog()->LogToFile("\001[VITA][TERRAIN] sec=%d texBind=%d texId=%d lowLodId=%d mats=%d re=%d "
-				"lowLodCover=%d texOff2=%.8f invSize=%.8f clientBind=%d",
-				GetSecIndex(), GetCVars()->e_terrain_texture_bind, m_nTextureID, m_nLowLodTextureID,
-				m_pLeafBuffer && m_pLeafBuffer->m_pMats ? m_pLeafBuffer->m_pMats->Count() : -1,
-				(m_pLeafBuffer && m_pLeafBuffer->m_pMats && m_pLeafBuffer->m_pMats->Count() &&
-					m_pLeafBuffer->m_pMats->GetAt(0).pRE) ? 1 : 0,
-				m_pTerrain->m_pLowLodCoverMapTex ? m_pTerrain->m_pLowLodCoverMapTex->GetTextureID() : -1,
-				m_arrTexOffsets[2], 1.f/CTerrain::GetTerrainSize(),
-				m_pLeafBuffer ? m_pLeafBuffer->m_nClientTextureBindID : -1);
-		}
-	}
-#endif
+	/* The sector-texture probe that lived here has been removed.  It showed the
+	   bind guard passing with a real texture id, which is what proved the
+	   white terrain was missing coordinates rather than a missing texture.
+	   It ran off a draw-call counter, so it had no place in a build meant to
+	   hold a frame rate. */
 
   if(GetCVars()->e_terrain_texture_bind && m_nTextureID && m_pLeafBuffer->m_pMats->Count() && m_pLeafBuffer->m_pMats->GetAt(0).pRE)
   {
