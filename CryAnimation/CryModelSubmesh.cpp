@@ -1112,6 +1112,15 @@ void CryModelSubmesh::ProcessSkinning(const Vec3& t, const Matrix44& mtxModel, i
 	bool bNeedVertices = true;
 
 	CLeafBuffer *lb = m_pLeafBuffers[nLod];
+	/* The two asserts below are the only thing standing between a missing LOD
+	   buffer or an unshaded material and a null dereference.  On Windows that
+	   is a debug break; here assert() is compiled down to a printf that carries
+	   on into the dereference, and materials without a shader genuinely occur
+	   on this port.  Since the render pipeline now calls this for every
+	   character it draws, bail out instead -- an unskinned character is a bad
+	   frame, a null dereference is a dead console. */
+	if (!lb || !lb->m_pMats)
+		return;
 
 	SShaderItem si;
 	for (int i = 0; i < lb->m_pMats->Count(); ++i)
@@ -1120,10 +1129,10 @@ void CryModelSubmesh::ProcessSkinning(const Vec3& t, const Matrix44& mtxModel, i
 		if (si.m_pShader)
 			break;
 	}
+	if (!si.m_pShader)
+		return;
 	IShader *ef;
-	assert (si.m_pShader);
 	ef = si.m_pShader->GetTemplate(nTemplate);
-	assert (ef);
 
 #ifdef _DEBUG
 	bool bAllowToCopyIntoVideoBufferDirectly = ((ef->GetFlags3() & EF3_NEEDSYSBUF) == 0);
