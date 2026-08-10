@@ -918,7 +918,49 @@ static inline void VitaInvalidateTextureCache()
 	g_nTexture2DEnabled = -1;
 }
 
-static void SetupVertexArraysForFormat(const byte *pBase, int nVertexFormat)
+/* Are this mesh's vertex colours actually carrying light, or are they just
+   zero?  Baked vertex lighting modulates the texture, so an all-black colour
+   array multiplies the surface out to solid black -- which is what the large
+   black shapes in interiors are: ordinary textured geometry whose vertex
+   colours never received any lighting.  Retail never shows that because its
+   shaders add an ambient term this fixed-function path has no equivalent for.
+
+   A surface that is genuinely meant to be pure black at every single vertex
+   does not occur in this game's data, so treating that case as "no lighting
+   supplied" and drawing the texture unmodulated is the safe reading.  The scan
+   is cached per buffer -- geometry is static and this is a few hundred byte
+   reads once, against doing it every frame. */
+static bool VitaVertexColoursAreUnlit(const byte *pData, int nVertexFormat, int nNumVerts)
+{
+	const SBufInfoTable &tbl = gBufInfoTable[nVertexFormat];
+	if (!pData || !tbl.OffsColor || nNumVerts <= 0)
+		return false;
+
+	struct SUnlitCacheEntry { const byte *pData; int nVerts; bool bUnlit; };
+	const int kSlots = 64;
+	static SUnlitCacheEntry s_arrCache[kSlots] = {{0,0,false}};
+	SUnlitCacheEntry &rEntry = s_arrCache[(((size_t)pData) >> 4) & (kSlots - 1)];
+	if (rEntry.pData == pData && rEntry.nVerts == nNumVerts)
+		return rEntry.bUnlit;
+
+	const int nStride = m_VertexSize[nVertexFormat];
+	int nBrightest = 0;
+	// A few hundred vertices is plenty to decide; whole meshes can be large.
+	const int nSampleStep = (nNumVerts > 256) ? (nNumVerts / 256) : 1;
+	for (int i = 0; i < nNumVerts && nBrightest < 24; i += nSampleStep)
+	{
+		const byte *c = pData + (size_t)i * nStride + tbl.OffsColor;
+		const int nMax = (c[0] > c[1] ? c[0] : c[1]) > c[2] ? (c[0] > c[1] ? c[0] : c[1]) : c[2];
+		if (nMax > nBrightest)
+			nBrightest = nMax;
+	}
+	rEntry.pData = pData;
+	rEntry.nVerts = nNumVerts;
+	rEntry.bUnlit = (nBrightest < 24);
+	return rEntry.bUnlit;
+}
+
+static void SetupVertexArraysForFormat(const byte *pBase, int nVertexFormat, bool bUnlitColours = false)
 {
 	const SBufInfoTable &tbl = gBufInfoTable[nVertexFormat];
 	int nStride = m_VertexSize[nVertexFormat];
@@ -926,7 +968,7 @@ static void SetupVertexArraysForFormat(const byte *pBase, int nVertexFormat)
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glVertexPointer(3, GL_FLOAT, nStride, pBase);
 
-	if (tbl.OffsColor && !g_bUntexturedSurface)
+	if (tbl.OffsColor && !g_bUntexturedSurface && !bUnlitColours)
 	{
 		glEnableClientState(GL_COLOR_ARRAY);
 		glColorPointer(4, GL_UNSIGNED_BYTE, nStride, pBase + tbl.OffsColor);
@@ -1128,7 +1170,8 @@ void CVitaRenderer::DrawTriStrip(CVertexBuffer * src, int vert_num)
 	const byte *pData = (const byte *)src->m_VS[VSF_GENERAL].m_VData;
 	if (!pData)
 		return;
-	SetupVertexArraysForFormat(pData, src->m_vertexformat);
+	SetupVertexArraysForFormat(pData, src->m_vertexformat,
+		VitaVertexColoursAreUnlit(pData, src->m_vertexformat, src->m_NumVerts));
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, vert_num);
 	TeardownVertexArrays();
 #endif
@@ -1357,7 +1400,8 @@ void CVitaRenderer::DrawBuffer(CVertexBuffer * src, SVertexStream * indicies, in
 	{
 		glBindBuffer(GL_ARRAY_BUFFER, src->m_nGLVBO);
 		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indicies->m_nGLIBO);
-		SetupVertexArraysForFormat(NULL, src->m_vertexformat);
+		SetupVertexArraysForFormat(NULL, src->m_vertexformat,
+			VitaVertexColoursAreUnlit(pData, src->m_vertexformat, src->m_NumVerts));
 		VitaApplyGeneratedTexCoords(pGeneratedUVs);
 		glDrawElements(PrimTypeToGL(prmode), numindices, GL_UNSIGNED_SHORT,
 			(const void *)(size_t)(offsindex * sizeof(ushort)));
@@ -1367,7 +1411,8 @@ void CVitaRenderer::DrawBuffer(CVertexBuffer * src, SVertexStream * indicies, in
 		return;
 	}
 
-	SetupVertexArraysForFormat(pData, src->m_vertexformat);
+	SetupVertexArraysForFormat(pData, src->m_vertexformat,
+		VitaVertexColoursAreUnlit(pData, src->m_vertexformat, src->m_NumVerts));
 	VitaApplyGeneratedTexCoords(pGeneratedUVs);
 	if (src->m_vertexformat == VERTEX_FORMAT_P3F_COL4UB)
 	{
