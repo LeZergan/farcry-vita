@@ -869,8 +869,20 @@ void CVitaRenderer::SetScissor(int x, int y, int width, int height)
 		glDisable(GL_SCISSOR_TEST);
 		return;
 	}
-	int nX = x < 0 ? 0 : x;
+	/* Clamping the left edge has to take the width with it.  Moving nX up to 0
+	   without shortening nW widened the rectangle by however far off-screen it
+	   started, so a HUD element hanging off the left of the screen would clip
+	   too much on its right -- the same class of mistake as the unflipped y,
+	   just quieter.  Same for the top edge, where nScissorY going negative
+	   already reduces nH. */
+	int nX = x;
+	if (nX < 0) { nW += nX; nX = 0; }
 	if (nScissorY < 0) { nH += nScissorY; nScissorY = 0; }
+	if (nW <= 0 || nH <= 0)
+	{
+		glDisable(GL_SCISSOR_TEST);
+		return;
+	}
 	if (nX + nW > m_nWidth)  nW = m_nWidth  - nX;
 	if (nScissorY + nH > m_nHeight) nH = m_nHeight - nScissorY;
 	if (nW <= 0 || nH <= 0)
