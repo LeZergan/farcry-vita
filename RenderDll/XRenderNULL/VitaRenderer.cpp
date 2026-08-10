@@ -1951,7 +1951,16 @@ CCObject * CVitaRenderer::EF_AddSpriteToScene(int Ef, int numPts, SColorVert * v
 #if defined(LINUX)
 	if (!verts || numPts < 3)
 		return obj;
-	std::vector<struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F> vitaVerts((size_t)numPts);
+	/* Reused across calls rather than built fresh each time.  This is the
+	   vegetation-sprite and particle path: it runs hundreds of times a frame in
+	   the open world, and two std::vector constructions per call meant hundreds
+	   of allocate/free pairs every frame purely to hold four vertices.  Static
+	   buffers keep their capacity after the first frame, so the steady state
+	   does no allocation at all.  The renderer is single-threaded here, and the
+	   contents never outlive the draw below. */
+	static std::vector<struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F> vitaVerts;
+	static std::vector<ushort> vitaIndices;
+	vitaVerts.resize((size_t)numPts);
 	for (int i = 0; i < numPts; ++i)
 	{
 		vitaVerts[i].xyz = verts[i].vert;
@@ -1959,7 +1968,7 @@ CCObject * CVitaRenderer::EF_AddSpriteToScene(int Ef, int numPts, SColorVert * v
 		vitaVerts[i].st[0] = verts[i].dTC[0];
 		vitaVerts[i].st[1] = verts[i].dTC[1];
 	}
-	std::vector<ushort> vitaIndices;
+	vitaIndices.clear();
 	if (inds && ninds > 0)
 	{
 		vitaIndices.resize((size_t)ninds);
