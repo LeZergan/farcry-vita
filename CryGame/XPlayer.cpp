@@ -905,6 +905,14 @@ void CPlayer::Update()
 		   puts your own head in front of the camera.  Clearing the flag every
 		   frame is a couple of bit operations on one entity. */
 		m_pEntity->DrawCharacter(0, 0);
+		/* DrawCharacter(ETY_DRAW_NONE) clears CS_FLAG_DRAW_MODEL *and* calls
+		   NeedsUpdateCharacter(pos, false), which clears CS_FLAG_UPDATE -- and
+		   CEntity::UpdateCharacters only updates characters carrying that flag.
+		   Doing this every frame would therefore stop the player's character
+		   updating for good, and the first-person weapon hangs off its hand
+		   bone.  CPlayer::SetViewMode issues both calls for exactly this
+		   reason; re-asserting the hide has to re-assert the update too. */
+		m_pEntity->NeedsUpdateCharacter(0, true);
 	}
 
 	if (bMyPlayer && !m_pVehicle && m_pEntity && !m_bFirstPerson)
