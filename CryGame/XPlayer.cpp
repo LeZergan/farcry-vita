@@ -894,6 +894,19 @@ void CPlayer::Update()
 	/* m_pEntity guarded: SetViewMode goes straight to m_pEntity->DrawCharacter,
 	   and this runs at the very top of the update, earlier than the original
 	   view-mode calls ever did. */
+	if (bMyPlayer && !m_pVehicle && m_pEntity && m_bFirstPerson)
+	{
+		/* Keep the body hidden, not just hidden once.  DrawCharacter only sets
+		   CS_FLAG_DRAW_MODEL on the character instance, and several paths set it
+		   back on WITHOUT touching m_bFirstPerson -- CXGame::SetViewMode issues
+		   DrawCharacter(0, ETY_DRAW_NORMAL) unconditionally before delegating,
+		   and HideLocalPlayer re-enables it on the way out of a cut scene.  So
+		   the flag can say first person while the model is drawn again, which
+		   puts your own head in front of the camera.  Clearing the flag every
+		   frame is a couple of bit operations on one entity. */
+		m_pEntity->DrawCharacter(0, 0);
+	}
+
 	if (bMyPlayer && !m_pVehicle && m_pEntity && !m_bFirstPerson)
 	{
 		/* Re-asserted whenever it comes back false, not once.  A single

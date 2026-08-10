@@ -343,6 +343,23 @@ int CUIVideoPanel::LoadVideo(const string &szFileName, bool bSound)
 		// call OnError synchronously -- BackScreen.OnError calls OnFinished,
 		// which calls LoadVideo again and overflows Lua's stack during menu
 		// creation.
+		/* Say which file, once per name.  A video that silently refuses to open
+		   leaves whatever the panel was covering on screen instead -- the world
+		   flashing through before the panel settles, and then an empty panel --
+		   and that is indistinguishable from a rendering fault unless the open
+		   failure is reported. */
+		{
+			static std::set<std::string> s_reportedMissingVideos;
+			if (s_reportedMissingVideos.size() < 32 &&
+				s_reportedMissingVideos.find(szFileName) == s_reportedMissingVideos.end())
+			{
+				s_reportedMissingVideos.insert(szFileName);
+				if (m_pUISystem && m_pUISystem->GetISystem() && m_pUISystem->GetISystem()->GetILog())
+					m_pUISystem->GetISystem()->GetILog()->LogToFile(
+						"\001[VITA][VIDEO] cannot open '%s' -- nothing will be drawn where this video should be",
+						szFileName.c_str());
+			}
+		}
 		m_bPlaying = 0;
 		m_bPaused = 0;
 		return 0;
