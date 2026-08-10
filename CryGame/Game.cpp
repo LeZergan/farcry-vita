@@ -75,14 +75,31 @@
 typedef std::basic_string< TCHAR > tstring;
 typedef std::vector< TCHAR > tvector;
 #endif
+
+#if defined(__vita__)
+//! engine_port/VitaInput.cpp -- lets the front touch panel drive the UI cursor.
+extern "C" void Vita_SetUICursorActive(int active);
+
+static void VitaLevelLoadTrace(const char *step)
+{
+	FILE *trace = fopen("ux0:data/farcry_level_load_trace.txt", "ab");
+	if (trace)
+	{
+		fprintf(trace, "%s\n", step);
+		fclose(trace);
+	}
+}
+#endif
  
 //////////////////////////////////////////////////////////////////////////
 // Pointer to Global ISystem.
 static ISystem* gISystem = 0;
+#if !defined(__vita__)
 ISystem* GetISystem()
 {
 	return gISystem;
 }
+#endif
 
 //////////////////////////////////////////////////////////////////////////////////////////////
 // DLL Interface
@@ -209,7 +226,9 @@ CXGame::~CXGame()
 		delete m_pIngameDialogMgr;
 	m_pIngameDialogMgr=NULL;
 
-#if !defined(LINUX)
+// m_pMovieUser is only created when the cut-scene camera is enabled (see
+// CXGame::Init); the movie system must not keep pointing at it once deleted.
+#if !defined(LINUX) || defined(__vita__)
 	if (m_pMovieUser)
 	{
 		if (m_pSystem)
@@ -548,10 +567,38 @@ bool CXGame::Init(struct ISystem *pSystem,bool bDedicatedSrv,bool bInEditor,cons
 	m_pServer	= NULL;
 
   m_pSystem->GetILog()->Log("Game Initialization");
-#if !defined(LINUX)	
+	/* Registering the movie user is what lets in-engine cut scenes take over the
+	   camera, hide the HUD and post subtitles.  CMovieUser compiles and runs on
+	   Vita, but with it enabled the view sits on the cut-scene camera for the
+	   whole sequence and the player cannot move -- which reads as a freeze
+	   rather than a cut scene, because the sequence's camera track does not
+	   animate here yet.  So it is off by default and opt-in through a console
+	   variable, and CMovieSystem::Update carries a watchdog that force-ends any
+	   cut scene left open with nothing playing, so enabling it can never strand
+	   the player in the "player_dead" action map for good. */
+#if !defined(LINUX)
 	IMovieSystem *pMovieSystem=m_pSystem->GetIMovieSystem();
 	if (pMovieSystem)
 		pMovieSystem->SetUser(m_pMovieUser);
+#elif defined(__vita__)
+	/* On by default now.  With it off, cut scenes never take the camera at all,
+	   which is simply "cut scenes do not exist".  The earlier objection was that
+	   the view sat still for the whole sequence -- but CMovieSystem::Update's
+	   watchdog force-ends any scene left open, sequences still end on their own
+	   duration, and CAnimEntityNode now reports a node whose entity will not
+	   resolve, which is the thing that would keep the camera from moving.
+	   Set g_vita_cutscene_camera 0 to go back to skipping them. */
+	m_pSystem->GetIConsole()->CreateVariable("g_vita_cutscene_camera","1",0,
+		"Let in-engine cut scenes drive the camera");
+	{
+		ICVar *pCutsceneCam = m_pSystem->GetIConsole()->GetCVar("g_vita_cutscene_camera");
+		IMovieSystem *pMovieSystem = m_pSystem->GetIMovieSystem();
+		if (pMovieSystem && pCutsceneCam && pCutsceneCam->GetIVal())
+		{
+			m_pMovieUser = new CMovieUser(this);
+			pMovieSystem->SetUser(m_pMovieUser);
+		}
+	}
 #endif
 	if (!m_pTimeDemoRecorder)
 		m_pTimeDemoRecorder = new CTimeDemoRecorder(pSystem);
@@ -686,6 +733,18 @@ bool CXGame::Init(struct ISystem *pSystem,bool bDedicatedSrv,bool bInEditor,cons
 			if (m_pUISystem)
 			{
 				m_pUISystem->Create(this, m_pSystem, m_pScriptSystem, "Scripts/MenuScreens/UISystem.lua", 1);
+#if defined(__vita__)
+				// The retail startup sequence is Bink/DivX-only.  Those desktop
+				// decoders are intentionally absent on Vita. The video panel's clean
+				// false return lets the stock sequencer advance to MainScreen; only
+				// disable later demo loops here, after the UI tables exist.
+				/* The menu's background video and the demo reels are Bink, which
+				   used to have no decoder here -- the playlist was emptied so
+				   BackScreen fell back to its static image instead of retrying an
+				   unavailable panel every frame.  libbinkdec now decodes them
+				   (see CUIVideoPanel::LoadVideo), so leave the retail behaviour
+				   alone and let the video play. */
+#endif
 			}
 			else
 			{
@@ -853,7 +912,12 @@ bool CXGame::Update()
 	//bool bPause=false;
 	IProcess *pProcess=m_pSystem->GetIProcess();
 	if (!pProcess)
+	{
+#if defined(LINUX)
+		sceClibPrintf("[BOOTTRACE] CXGame::Update abort: no active IProcess\n");
+#endif
 		return false;
+	}
 
 	bool bPause=IsInPause(pProcess);
 	if (m_bIsLoadingLevelFromFile)
@@ -870,7 +934,7 @@ bool CXGame::Update()
 	}
 #endif
 	// [marco] check current sound and vis areas
-	// for music etc.	
+	// for music etc.
 	CheckSoundVisAreas();
 
 	//int nStartGC=m_pScriptSystem->GetCGCount();
@@ -889,7 +953,13 @@ bool CXGame::Update()
 	}
 	
 	if (!m_pSystem->Update(IsMultiplayer() ? ESYSUPDATE_MULTIPLAYER:0, nPauseMode)) //Update returns false when quitting
+	{
+#if defined(LINUX)
+		sceClibPrintf("[BOOTTRACE] CXGame::Update abort: CSystem::Update returned false (quitting=%d)\n",
+			m_pSystem->IsQuitting() ? 1 : 0);
+#endif
 		return (false);
+	}
 
 	if (IsMultiplayer()) {
 		pe_params_flags pf; pf.flagsAND = ~pef_update;
@@ -961,38 +1031,64 @@ bool CXGame::Update()
 
 	// system rendering
 	if (bRenderFrame)
-	{	
+	{
 		// render begin must be always called anyway to clear buffer, draw buttons etc.
 		// even in menu mode
 		m_pSystem->RenderBegin();
-		
 		m_pSystem->Render();
 		pTimer->MeasureTime("3SysRend");
 	}
-		
-	// update the HUD	
-	if (m_pCurrentUI && !bPause && m_pClient && m_pClient->m_bDisplayHud)		
+#if defined(__vita__)
+	/* Four separate things gate the HUD, and if any one of them is off the
+	   result is identical on screen: no HUD.  m_pCurrentUI in particular is only
+	   ever set from CXClient::SetPlayerID, and only when the player entity
+	   resolves -- so a HUD that never appears usually means that call never
+	   happened rather than anything wrong with the drawing. */
+	{
+		static unsigned s_nHudReportCounter = 0;
+		if ((s_nHudReportCounter++ % 120) == 0 && m_pLog)
+			m_pLog->LogToFile("\001[VITA][HUD] currentUI=%p pause=%d client=%p displayHud=%d cl_display_hud=%d",
+				(void *)m_pCurrentUI, bPause ? 1 : 0, (void *)m_pClient,
+				m_pClient ? (m_pClient->m_bDisplayHud ? 1 : 0) : -1,
+				cl_display_hud ? cl_display_hud->GetIVal() : -1);
+	}
+#endif
+	// update the HUD
+	if (m_pCurrentUI && !bPause && m_pClient && m_pClient->m_bDisplayHud)
 	{
 		FRAME_PROFILER( "GameUpdate:HUD",m_pSystem,PROFILE_GAME );
 
 		// update hud itself
 		if(!m_pCurrentUI->Update())
+		{
+#if defined(LINUX)
+			sceClibPrintf("[BOOTTRACE] CXGame::Update: current HUD requested loop stop\n");
+#endif
 			m_bUpdateRet = false;
+		}
 
     // update ingame-dialog-manager
 		if (m_pIngameDialogMgr)
 			m_pIngameDialogMgr->Update();
-	
+
     pTimer->MeasureTime("HUD Up");
 	}
-
+#if defined(__vita__)
+	/* Tell the Vita input backend whether the retail cursor is on screen, so
+	   the front touch panel can drive it.  This exact condition is the one
+	   guarding the UI's own Update/Draw below -- the input side cannot derive
+	   it, since the main menu registers the UI through AddEventListener while
+	   only in-game overlays go through SetExclusiveListener. */
+	Vita_SetUICursorActive(m_pUISystem && m_pUISystem->IsEnabled() &&
+		(m_bMenuOverlay || m_bUIOverlay));
+#endif
 	if (m_pUISystem && m_pUISystem->IsEnabled())
 	{
 		FRAME_PROFILER("GameUpdate:UI", m_pSystem, PROFILE_GAME);
 
 		if (m_bMenuOverlay || m_bUIOverlay)
 		{
-			m_pUISystem->Update();			
+			m_pUISystem->Update();
 			m_pUISystem->Draw();
 		}
 	}
@@ -1052,17 +1148,17 @@ bool CXGame::Update()
 		{
 			string smsg=m_qMessages.front();
 			m_qMessages.pop();
-			ProcessPMessages(smsg.c_str());		
+			ProcessPMessages(smsg.c_str());
 		}
 
 		// the messages can switch the game to menu or viceversa
 		bPause=IsInPause(pProcess);
 	}
-	
+
 	//update script timers
 	if(m_pScriptTimerMgr)
 		m_pScriptTimerMgr->Update( (unsigned long)(pTimer->GetCurrTime()*1000) );
-	
+
 	pTimer->MeasureTime("ScrTimerUp");
 
 	if(g_GC_Frequence->GetFVal()>0)
@@ -1087,6 +1183,18 @@ bool CXGame::Update()
 	m_pSystem->GetIProfileSystem()->EndFrame();
 	//////////////////////////////////////////////////////////////////////////
 
+#if defined(LINUX)
+	if (!m_bUpdateRet)
+		sceClibPrintf("[BOOTTRACE] CXGame::Update abort: m_bUpdateRet cleared\n");
+#if defined(__vita__)
+	static bool s_reportedFirstFrame = false;
+	if (m_bUpdateRet && !s_reportedFirstFrame)
+	{
+		m_pLog->Log("[VITA] first CryGame frame completed");
+		s_reportedFirstFrame = true;
+	}
+#endif
+#endif
 	return (m_bUpdateRet);
 }
 
@@ -1309,6 +1417,9 @@ void CXGame::ProcessPMessages(const char *szMsg)
 	}
 	else if (strnicmp(szMsg,"StartLevel",10)==0)		 // start a level
 	{
+#if defined(__vita__)
+		VitaLevelLoadTrace("ProcessPMessages: StartLevel");
+#endif
 		if (!m_bEditor)
 		{
 			ICVar *g_LevelStated = GetISystem()->GetIConsole()->GetCVar("g_LevelStated");
@@ -1341,6 +1452,9 @@ void CXGame::ProcessPMessages(const char *szMsg)
 				m_p3DEngine->SetScreenFx("ScreenFade",0);
 
 				ParseLevelName(szMsg,szLevelName,szMissionName);
+#if defined(__vita__)
+				VitaLevelLoadTrace("ProcessPMessages: parsed level");
+#endif
 
 				bool listen = false;
 				if (strcmp(szMissionName, "listen")==0)
@@ -1354,7 +1468,13 @@ void CXGame::ProcessPMessages(const char *szMsg)
 				// disable input handling during load
 				m_pSystem->GetIInput()->EnableEventPosting(0);
 				m_pSystem->GetIInput()->GetIKeyboard()->ClearKeyState();
+			#if defined(__vita__)
+				VitaLevelLoadTrace("ProcessPMessages: calling LoadLevelCS");
+			#endif
 				LoadLevelCS(false, szLevelName, szMissionName, listen);
+#if defined(__vita__)
+				VitaLevelLoadTrace("ProcessPMessages: LoadLevelCS returned");
+#endif
 				// finished loading, reenable input handling			
 				m_pSystem->GetIInput()->EnableEventPosting(1);
 				m_pSystem->GetIInput()->GetIKeyboard()->ClearKeyState();
@@ -1439,6 +1559,9 @@ void CXGame::ProcessPMessages(const char *szMsg)
 //////////////////////////////////////////////////////////////////////////
 void CXGame::LoadLevelCS(bool keepclient, const char *szMapName, const char *szMissionName, bool listen)
 {
+#if defined(__vita__)
+	VitaLevelLoadTrace("LoadLevelCS: entered");
+#endif
 	// need to reset timers as well
 	m_pScriptTimerMgr->Reset();
 
@@ -1505,6 +1628,9 @@ void CXGame::LoadLevelCS(bool keepclient, const char *szMapName, const char *szM
 		LoadingError("@LoadLevelError");
 		return;
 	}
+#if defined(__vita__)
+	VitaLevelLoadTrace("LoadLevelCS: server started");
+#endif
 
 	bool bNeedClient = !bDedicated && ((keepclient && !m_pClient) || !keepclient);
 
@@ -1520,6 +1646,9 @@ void CXGame::LoadLevelCS(bool keepclient, const char *szMapName, const char *szM
 			return;
 		}
 	}
+#if defined(__vita__)
+	VitaLevelLoadTrace("LoadLevelCS: local client started");
+#endif
 
 	const char *szMission = szMissionName;
 	if (!*szMissionName)
@@ -1532,6 +1661,9 @@ void CXGame::LoadLevelCS(bool keepclient, const char *szMapName, const char *szM
 	m_pServer->GetServerInfo();
 
 	// load the level
+#if defined(__vita__)
+	VitaLevelLoadTrace("LoadLevelCS: calling ISystem::LoadLevel");
+#endif
 	if(!m_pServer->m_pISystem->LoadLevel( sLevelFolder.c_str(),szMission,false))
 	{
 		m_pLog->LogToConsole("Unable to load the level %s,mission %s \n", sLevelFolder.c_str(),szMissionName);
@@ -1540,6 +1672,9 @@ void CXGame::LoadLevelCS(bool keepclient, const char *szMapName, const char *szM
 		LoadingError("@LoadLevelError");
 		return;
 	}
+#if defined(__vita__)
+	VitaLevelLoadTrace("LoadLevelCS: ISystem::LoadLevel returned success");
+#endif
 
 // start and connect a local client
 	if(bNeedClient)
