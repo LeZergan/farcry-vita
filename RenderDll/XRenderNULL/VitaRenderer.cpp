@@ -850,15 +850,36 @@ void CVitaRenderer::SetScissor(int x, int y, int width, int height)
 		glDisable(GL_SCISSOR_TEST);
 		return;
 	}
-	glEnable(GL_SCISSOR_TEST);
 	/* glScissor's origin is the bottom-left of the framebuffer, but every
 	   caller here is working in screen space with y increasing downwards --
 	   CScriptObjectSystem::SetScissor feeds it ScaleCoordY'd HUD coordinates
 	   straight from the scripts.  Passing those through unflipped puts the
 	   rectangle on the opposite side of the screen from the thing it is meant
 	   to clip, so HUD elements that draw inside a scissor region (the health
-	   and stamina bars use one) are clipped away entirely. */
-	glScissor(x, m_nHeight - (y + height), width, height);
+	   and stamina bars use one) are clipped away entirely.
+
+	   Clamped to the framebuffer, and a degenerate rectangle turns the test off
+	   rather than being submitted: a negative width or height is a GL error,
+	   and handing the driver a rectangle outside the render target is the kind
+	   of thing that wedges the GPU rather than failing cleanly. */
+	int nScissorY = m_nHeight - (y + height);
+	int nW = width, nH = height;
+	if (nW <= 0 || nH <= 0)
+	{
+		glDisable(GL_SCISSOR_TEST);
+		return;
+	}
+	int nX = x < 0 ? 0 : x;
+	if (nScissorY < 0) { nH += nScissorY; nScissorY = 0; }
+	if (nX + nW > m_nWidth)  nW = m_nWidth  - nX;
+	if (nScissorY + nH > m_nHeight) nH = m_nHeight - nScissorY;
+	if (nW <= 0 || nH <= 0)
+	{
+		glDisable(GL_SCISSOR_TEST);
+		return;
+	}
+	glEnable(GL_SCISSOR_TEST);
+	glScissor(nX, nScissorY, nW, nH);
 #endif
 }
 void CVitaRenderer::MakeCurrent() { }

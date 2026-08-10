@@ -891,7 +891,10 @@ void CPlayer::Update()
 	   the player instance rather than a bare static so a new player (level load,
 	   respawn) re-applies, while leaving the dev-mode toggle and the vehicle
 	   camera free to change it afterwards. */
-	if (bMyPlayer && !m_pVehicle)
+	/* m_pEntity guarded: SetViewMode goes straight to m_pEntity->DrawCharacter,
+	   and this runs at the very top of the update, earlier than the original
+	   view-mode calls ever did. */
+	if (bMyPlayer && !m_pVehicle && m_pEntity)
 	{
 		static const CPlayer *s_pLastForcedFirstPerson = NULL;
 		if (s_pLastForcedFirstPerson != this)
