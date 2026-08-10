@@ -732,35 +732,7 @@ void CPlayer::UpdateDead( SPlayerUpdateContext &ctx )
 
 //		UpdateDrawAngles( );
 
-#if defined(__vita__)
-	/* Put the local player into first person and keep his body from being drawn.
-	   m_bFirstPerson starts false (third person), and on a level started fresh
-	   nothing ever turns it on -- SetViewMode is otherwise only reached from a
-	   save-game restore or a manual view toggle.  The third-person camera then
-	   sits at zero distance, i.e. inside the character, which is why you end up
-	   looking around from within his model.  Far Cry is a first-person game, so
-	   select that once, and issue the DrawCharacter(0,0) that stops drawing the
-	   body.  Done once rather than every frame so the dev-mode view toggle and
-	   the vehicle third-person camera still work afterwards; skipped entirely
-	   while in a vehicle, where third person is the intended view. */
-	if (IsMyPlayer() && !m_pVehicle)
-	{
-		/* Keyed to the player instance, not a plain one-shot.  A bare static bool
-		   latches for the lifetime of the process, so if it fired once for an
-		   earlier player -- during the menu, or a previous level -- the player
-		   you are actually controlling never got it, and kept the third-person
-		   camera sitting inside his own head.  Re-applying for each new player
-		   instance fixes that while still leaving the dev-mode view toggle and
-		   the vehicle camera free to change it afterwards. */
-		static const CPlayer *s_pLastForcedFirstPerson = NULL;
-		if (s_pLastForcedFirstPerson != this)
-		{
-			s_pLastForcedFirstPerson = this;
-			m_bFirstPerson = true;
-			SetViewMode(false);
-		}
-	}
-#endif
+
 
 	if (m_bFirstPerson)
 	{
@@ -902,6 +874,37 @@ void CPlayer::Update()
 
 	bool bMyPlayer = IsMyPlayer();
 	bool bPlayerVisible = bMyPlayer || IsVisible();
+
+#if defined(__vita__)
+	/* Put the local player into first person and stop his body being drawn.
+	   m_bFirstPerson starts false (third person) and on a level started fresh
+	   nothing ever turns it on -- SetViewMode is otherwise only reached from a
+	   save-game restore or a manual view toggle.  The third-person camera then
+	   sits at zero distance, i.e. inside the character, which is why you look
+	   around from within his model.  SetViewMode(false) is what issues the
+	   DrawCharacter(0,0) that hides the body.
+
+	   This lives in CPlayer::Update -- the live per-frame update.  Two previous
+	   attempts failed because of where they sat: one inside "if (m_bFirstPerson)",
+	   the branch that by definition never runs while it is false, and one inside
+	   CPlayer::UpdateDead, which only runs when the player is dead.  Keyed to
+	   the player instance rather than a bare static so a new player (level load,
+	   respawn) re-applies, while leaving the dev-mode toggle and the vehicle
+	   camera free to change it afterwards. */
+	if (bMyPlayer && !m_pVehicle)
+	{
+		static const CPlayer *s_pLastForcedFirstPerson = NULL;
+		if (s_pLastForcedFirstPerson != this)
+		{
+			s_pLastForcedFirstPerson = this;
+			m_bFirstPerson = true;
+			SetViewMode(false);
+			if (m_pGame && m_pGame->m_pSystem && m_pGame->m_pSystem->GetILog())
+				m_pGame->m_pSystem->GetILog()->LogToFile(
+					"\001[VITA][VIEW] local player forced to first person; body hidden");
+		}
+	}
+#endif
 
 	SPlayerUpdateContext ctx;
 	ctx.bPlayerVisible = bPlayerVisible;
