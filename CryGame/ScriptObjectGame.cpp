@@ -791,6 +791,10 @@ int CScriptObjectGame::WriteHudString(IFunctionHandler *pH)
 	pH->GetParam(9,ysize);
 	
 	IFFont *pFont=pHud->Getfont();
+	// Unguarded before: a HUD with no registered font took the game down on
+	// the first string the scripts tried to draw.
+	if (!pFont)
+		return pH->EndFunction(px);
 	pFont->Reset();
 
 	if(pH->GetParamCount()>=10)
@@ -873,6 +877,10 @@ int CScriptObjectGame::WriteHudStringFixed(IFunctionHandler *pH)
 	}
 
 	IFFont *pFont=pHud->Getfont();
+	// Unguarded before: a HUD with no registered font took the game down on
+	// the first string the scripts tried to draw.
+	if (!pFont)
+		return pH->EndFunction(px);
 	pFont->Reset();
   
   pH->GetParam(4,r);

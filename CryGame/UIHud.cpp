@@ -29,12 +29,16 @@ CUIHud::CUIHud(CXGame *pGame,ISystem *pISystem)
 
 	ICryFont *pICryFont=m_pISystem->GetICryFont();
 
+	m_pFont = 0;
 	if(pICryFont)
 	{
-		m_pFont= pICryFont->GetFont("Default");
-		m_pFont->SetEffect("default");
+		/* GetFont can return null if the font was never registered, and the
+		   SetEffect call that followed dereferenced it unconditionally -- a
+		   null deref during HUD construction. */
+		m_pFont = pICryFont->GetFont("Default");
+		if(m_pFont)
+			m_pFont->SetEffect("default");
 	}
-	else m_pFont=0;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -104,8 +108,12 @@ void CUIHud::SetFont(const char *pszFontName, const char *pszEffectName)
 	m_pFont=m_pISystem->GetICryFont()->GetFont(pszFontName);
 	if (!m_pFont)
 	{
+		// The "Default" fallback can be absent too -- it was dereferenced here
+		// without a check, so a missing font took the game down instead of
+		// leaving the HUD text undrawn.
 		m_pFont=m_pISystem->GetICryFont()->GetFont("Default");
-		m_pFont->SetEffect("default");
+		if (m_pFont)
+			m_pFont->SetEffect("default");
 	}else
 		m_pFont->SetEffect(pszEffectName);
 }
@@ -114,6 +122,8 @@ void CUIHud::SetFont(const char *pszFontName, const char *pszEffectName)
 //////////////////////////////////////////////////////////////////////////
 void CUIHud::WriteNumber(int px, int py, int number, float r, float g, float b, float a, float xsize/* =1 */, float ysize/* =1 */)
 {
+	if (!m_pFont)
+		return;	// no font registered: draw nothing rather than dereference null
 	m_pFont->Reset();
 	vector2f hsize(xsize,ysize);
 	m_pFont->SetSize(hsize);
@@ -130,6 +140,8 @@ void CUIHud::WriteNumber(int px, int py, int number, float r, float g, float b, 
 //////////////////////////////////////////////////////////////////////////
 void CUIHud::WriteString(int px, int py, const wchar_t *swStr, float r, float g, float b, float a, float xsize/* =1 */, float ysize/* =1 */, float fWrapWidth)
 {
+	if (!m_pFont)
+		return;	// no font registered: draw nothing rather than dereference null
 	m_pFont->Reset();
 	vector2f hsize (xsize,ysize);
 	m_pFont->SetSize(hsize);
@@ -150,6 +162,8 @@ void CUIHud::WriteString(int px, int py, const wchar_t *swStr, float r, float g,
 //void CUIHud::WriteStringFixed(int px, int py, char *pszStr, float r, float g, float b, float a,float xsize/* =1 */, float ysize/* =1 */, float fWidthScale)
 void CUIHud::WriteStringFixed(int px, int py, const wchar_t *swStr, float r, float g, float b, float a,float xsize/* =1 */, float ysize/* =1 */, float fWidthScale)
 {
+	if (!m_pFont)
+		return;	// no font registered: draw nothing rather than dereference null
 	m_pFont->Reset();
 	m_pFont->SetSameSize(TRUE);
 	m_pFont->SetCharWidthScale(fWidthScale);
