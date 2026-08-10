@@ -851,7 +851,14 @@ void CVitaRenderer::SetScissor(int x, int y, int width, int height)
 		return;
 	}
 	glEnable(GL_SCISSOR_TEST);
-	glScissor(x, y, width, height);
+	/* glScissor's origin is the bottom-left of the framebuffer, but every
+	   caller here is working in screen space with y increasing downwards --
+	   CScriptObjectSystem::SetScissor feeds it ScaleCoordY'd HUD coordinates
+	   straight from the scripts.  Passing those through unflipped puts the
+	   rectangle on the opposite side of the screen from the thing it is meant
+	   to clip, so HUD elements that draw inside a scissor region (the health
+	   and stamina bars use one) are clipped away entirely. */
+	glScissor(x, m_nHeight - (y + height), width, height);
 #endif
 }
 void CVitaRenderer::MakeCurrent() { }
