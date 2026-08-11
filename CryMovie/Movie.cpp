@@ -53,6 +53,7 @@ CMovieSystem::CMovieSystem( ISystem *system )
 	m_lastGenId = 1;
 	m_nOpenCutScenes = 0;
 	m_fOpenCutSceneTime = 0.0f;
+	m_fLastAsyncUpdateTime = 0.0f;
 	m_sequenceStopBehavior = ONSTOP_GOTO_END_TIME;
 
 	system->GetIConsole()->Register( "mov_NoCutscenes",&m_mov_NoCutscenes,0,0,"Disable playing of Cut-Scenes" );
@@ -578,10 +579,28 @@ void CMovieSystem::Update( float dt )
 	   updated over and over and its time never moves, so it never reaches the
 	   end of its range, never stops on its own, and holds the camera and the
 	   player's controls until something else ends it.
-	   Advance by a nominal frame instead.  Only applied while something is
-	   actually playing, so an idle movie system still costs nothing, and a real
-	   delta is always preferred when there is one. */
-	if (dt <= 0.0f && !m_playingSequences.empty())
+	   Advance by real elapsed time instead.  A nominal 1/60 per call, which is
+	   what this used to substitute, is only correct when the game is running at
+	   60 fps: at the 20-odd fps a cut scene with characters on screen actually
+	   costs, the sequence advances a third of a second for every second that
+	   passes.  The dialogue and music are played by the sound system in real
+	   time and do not slow down with it, so the scene drifts further behind its
+	   own audio the longer it runs, and a 23-second sequence needs over a minute
+	   of wall clock to reach the end of its range -- which is most of what "the
+	   cut scene never ends" is.  Only applied while something is playing, so an
+	   idle movie system still costs nothing, and a real delta from the caller is
+	   always preferred when there is one. */
+	if (m_system && m_system->GetITimer())
+	{
+		const float fNow = m_system->GetITimer()->GetAsyncCurTime();
+		if (dt <= 0.0f && !m_playingSequences.empty())
+		{
+			dt = (m_fLastAsyncUpdateTime > 0.0f) ? (fNow - m_fLastAsyncUpdateTime) : (1.0f / 60.0f);
+			dt = max(0.0f, min(0.5f, dt));
+		}
+		m_fLastAsyncUpdateTime = fNow;
+	}
+	else if (dt <= 0.0f && !m_playingSequences.empty())
 		dt = 1.0f / 60.0f;
 #endif
 

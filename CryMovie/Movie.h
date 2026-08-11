@@ -145,7 +145,12 @@ private:
 	   whose camera does not animate -- would otherwise leave the player staring
 	   at a frozen frame with no way out. */
 	float m_fOpenCutSceneTime;
-	
+	/*! Wall clock at the previous update, for deriving a real delta when the
+	    caller supplies none.  A nominal 1/60 per call is only correct at 60 fps;
+	    below that the sequence runs slow against the audio, which plays in real
+	    time regardless. */
+	float m_fLastAsyncUpdateTime;
+
 	bool m_bRecording;
 	bool m_bPaused;
 
