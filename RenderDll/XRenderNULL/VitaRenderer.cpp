@@ -20,6 +20,12 @@
 #include <ICryAnimation.h>
 #endif
 
+/* Last value handed to SetState, so an identical one can skip the GL calls
+   entirely.  -1 is "unknown": no real GS_* combination is negative, so it can
+   never match and always forces a full re-issue. */
+static int g_nCachedRenderState = -1;
+static inline void VitaInvalidateRenderStateCache() { g_nCachedRenderState = -1; }
+
 CVitaRenderer *gcpVitaRenderer = NULL;
 
 /* Vita: this class is fully self-contained (doesn't link NULL_System.cpp,
@@ -555,6 +561,7 @@ WIN_HWND CVitaRenderer::Init(int x, int y, int width, int height, unsigned int c
 	glDisable(GL_BLEND);
 	glDisable(GL_ALPHA_TEST);
 	glDisable(GL_SCISSOR_TEST);
+	VitaInvalidateRenderStateCache();
 	sceClibPrintf("[BOOTTRACE] CVitaRenderer::Init: after glViewport\n");
 	return (WIN_HWND)this; // just checked against NULL by callers
 #else
@@ -634,6 +641,8 @@ void CVitaRenderer::BeginFrame()
 	glClearColor(m_vClearColor.x, m_vClearColor.y, m_vClearColor.z, 1.0f);
 	glClearDepthf(1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	// glDepthMask above was set behind SetState's back.
+	VitaInvalidateRenderStateCache();
 
 #if defined(VITA_DEBUG_CLEARCOLOR)
 	/* Ground truth for the white-sky bug: how many frames actually reach the
@@ -948,6 +957,7 @@ static bool g_bUntexturedSurface = false;
    renderer is a stub and never reaches GL. */
 static bool g_bSurfaceTintActive = false;
 static float g_arrSurfaceTint[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
 
 /* SetTexture runs once per material chunk -- thousands of times a frame -- and
    re-binding the texture that is already bound still makes vitaGL re-validate
@@ -1681,6 +1691,23 @@ static GLenum GSBlendDstToGL(int nState)
 void CVitaRenderer::SetState(int State)
 {
 #if defined(LINUX)
+	/* Skip the whole thing when nothing has changed.  This is called once per
+	   draw call and it issued seven or eight GL calls every time regardless --
+	   blend enable, blend func, depth mask, depth enable, depth func, alpha
+	   enable, alpha func -- for a state that is usually identical to the
+	   previous draw.  A view is thousands of draw calls, so that is tens of
+	   thousands of redundant driver calls a frame, each one dirty-flagging state
+	   the driver then has to reconcile before it can submit.  Consecutive draws
+	   sharing a state is the common case, not the exception: opaque world
+	   geometry runs in long runs of GS_DEPTHWRITE.
+
+	   The cache is only valid while nothing else touches these states behind our
+	   back, so every path that sets them directly -- BeginFrame, the 2D image
+	   and font paths, the shutdown reset -- invalidates it. */
+	if (State == g_nCachedRenderState)
+		return;
+	g_nCachedRenderState = State;
+
 	int nBlend = State & GS_BLEND_MASK;
 	if (nBlend)
 	{
@@ -1845,6 +1872,9 @@ void CVitaRenderer::Draw2dImage(float xpos, float ypos, float w, float h, int te
 	glPopMatrix();
 	glMatrixMode(GL_MODELVIEW);
 	glPopMatrix();
+	// Blend/depth enables are restored here but the blend *function* is not,
+	// so what SetState last recorded no longer describes the driver.
+	VitaInvalidateRenderStateCache();
 	if (wasDepth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
 	if (wasBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
 	if (wasTexture) glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D);
@@ -2100,6 +2130,8 @@ void CVitaRenderer::FontSetRenderingState(unsigned long nVirtualScreenWidth, uns
 	glDisable(GL_DEPTH_TEST);
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	// Text sets depth and blend directly, so SetState's record is stale after it.
+	VitaInvalidateRenderStateCache();
 #endif
 }
 void CVitaRenderer::FontSetBlending(int src, int dst)
@@ -3932,6 +3964,7 @@ void CVitaRenderer::ResetToDefault()
 	glDepthFunc(GL_LEQUAL);
 	glDepthMask(GL_TRUE);
 	glColor4f(1, 1, 1, 1);
+	VitaInvalidateRenderStateCache();
 	SetViewport(0, 0, m_nWidth, m_nHeight);
 #endif
 }
