@@ -1140,8 +1140,24 @@ static void TeardownVertexArrays()
    small ones are dominated by per-call overhead, and the level has thousands
    of them.  And the total is capped: the vitaGL pool is shared with textures,
    and quietly exhausting it would trade frame rate for a crash. */
-static const int kGLBufferMinVerts = 64;
-static const unsigned int kGLBufferBudgetBytes = 20u * 1024u * 1024u;
+/* Anything that misses these two limits is drawn from client memory, which on
+   this driver means the vertex data is copied into a command buffer again on
+   every single draw call, every frame, for geometry that never changes.
+
+   The vertex floor was 64, and a Far Cry level is mostly small props -- crates,
+   rails, pipes, foliage cards -- so the majority of the draw calls in a view
+   were taking the copy path.  A mesh below the floor is cheap to keep resident
+   precisely because it is small, so the floor buys nothing; 8 still excludes
+   the handful-of-vertices quads where a buffer object is pure overhead.
+
+   The budget was 20 MB against a 96 MB vitaGL main-RAM pool with CDRAM on top,
+   so it ran out part way through a level and everything after it fell back to
+   copying forever.  48 MB leaves comfortable headroom and covers far more of
+   the static world.  Say so once when it does run out, since the symptom --
+   the frame rate quietly depending on which order geometry happened to load --
+   is otherwise invisible. */
+static const int kGLBufferMinVerts = 8;
+static const unsigned int kGLBufferBudgetBytes = 48u * 1024u * 1024u;
 static unsigned int g_nGLBufferBytesUsed = 0;
 
 static bool EnsureGLVertexBuffer(CVertexBuffer *src)
@@ -1157,7 +1173,17 @@ static bool EnsureGLVertexBuffer(CVertexBuffer *src)
 	if (!src->m_nGLVBO)
 	{
 		if (g_nGLBufferBytesUsed + nBytes > kGLBufferBudgetBytes)
+		{
+			static bool s_bReportedBudgetFull = false;
+			if (!s_bReportedBudgetFull && iLog)
+			{
+				s_bReportedBudgetFull = true;
+				iLog->LogToFile("\001[VITA][PERF] GPU buffer budget exhausted at %u KB -- "
+					"remaining geometry is copied from client memory every draw",
+					g_nGLBufferBytesUsed / 1024u);
+			}
 			return false;
+		}
 		GLuint nName = 0;
 		glGenBuffers(1, &nName);
 		if (!nName)
