@@ -22,6 +22,8 @@
 #include <Cry_Camera.h>
 #if defined(LINUX)
 #include <psp2/kernel/clib.h>
+#include <psp2/kernel/cpu.h>
+#include <psp2/kernel/threadmgr.h>
 #include <psp2/ctrl.h>
 #include <psp2/power.h>
 #include <psp2/net/net.h>
@@ -254,6 +256,19 @@ int main(int argc, char *argv[]) {
 #endif
 	SSystemInitParams sip;
 #if defined(LINUX)
+	/* Give the game loop a core of its own.  Nothing in this port had ever set a
+	   thread affinity, so every thread inherited the default mask and the
+	   scheduler was free to put the engine and the audio mixer on the same core
+	   -- which is what "all the load on one core" looks like.  The engine itself
+	   is single threaded, so this does not make it faster on its own; what it
+	   does is stop the one genuinely concurrent piece of work in the process
+	   from being scheduled on top of it.  The mixer takes core 2
+	   (engine_port/CrySoundVita.cpp). */
+	{
+		const int nAffinity = sceKernelChangeThreadCpuAffinityMask(0, SCE_KERNEL_CPU_MASK_USER_0);
+		VitaBootMark("main thread pinned to CPU 0 (result 0x%08x)", (unsigned)nAffinity);
+	}
+
 	VitaBootMark("before CreateSystemInterface");
 #endif
 	ISystem *pSystem = CreateSystemInterface(sip);

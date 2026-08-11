@@ -23,6 +23,7 @@
 
 #include <psp2/audioout.h>
 #include <psp2/kernel/clib.h>
+#include <psp2/kernel/cpu.h>
 #include <psp2/kernel/threadmgr.h>
 
 #include <math.h>
@@ -607,7 +608,23 @@ signed char CS_Init(int mixrate, int maxsoftwarechannels, unsigned int flags)
 
 	g_mutex = sceKernelCreateMutex("crysound_mix", 0, 0, 0);
 	g_running = 1;
-	g_thread = sceKernelCreateThread("crysound_mixer", MixerThread, 0x10000100, 0x10000, 0, 0, 0);
+	/* Pin the mixer to its own core.  The sixth argument is the CPU affinity
+	   mask and this passed 0, which means "inherit", so the mixer ran on
+	   whichever core created it -- the main thread's, core 0.  Everything else
+	   in this port is on that same core (the engine is single threaded and this
+	   is the only other thread it has), so a 32-voice software mixer resampling
+	   and summing into a float accumulator at 48 kHz was being paid for out of
+	   the frame budget, continuously.  Core 2 is otherwise idle here. */
+	g_thread = sceKernelCreateThread("crysound_mixer", MixerThread, 0x10000100, 0x10000,
+		0, SCE_KERNEL_CPU_MASK_USER_2, 0);
+	if (g_thread < 0)
+	{
+		// Older kernels reject an explicit user mask on some configurations;
+		// an unpinned mixer is still better than no audio at all.
+		sceClibPrintf("[VITA AUDIO] pinned mixer thread rejected (0x%08x), retrying unpinned\n",
+			(unsigned)g_thread);
+		g_thread = sceKernelCreateThread("crysound_mixer", MixerThread, 0x10000100, 0x10000, 0, 0, 0);
+	}
 	if (g_thread < 0)
 	{
 		sceClibPrintf("[VITA AUDIO] mixer thread creation failed: 0x%08x\n", (unsigned)g_thread);
