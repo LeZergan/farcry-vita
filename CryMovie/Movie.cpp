@@ -441,9 +441,44 @@ void CMovieSystem::StopSequence( IAnimSequence *seq )
 						--m_nOpenCutScenes;
 				}
 			}
+			// Give the view back if that was the last sequence running.
+			ReleaseCameraIfIdle();
 			break;
 		}
 	}
+}
+
+//////////////////////////////////////////////////////////////////////////
+void CMovieSystem::ReleaseCameraIfIdle()
+{
+	/* Hand the view back to the player once nothing is playing.
+
+	   A sequence's camera track assigns an active camera by entity id, and
+	   CXClient::Update prefers that entity's camera over everything else: if
+	   m_CameraParams->nCameraId is set it builds the view from that entity and
+	   the player's own camera is never consulted.  Nothing cleared it when a
+	   sequence stopped -- the only two places that reset it are Reset() and
+	   PlayOnLoadSequences(), both of which run at level load.  So from the end
+	   of a level's first cut scene onwards the view stayed welded to the cut
+	   scene's camera for the rest of the session.
+
+	   That is the whole of "first person doesn't work": CPlayer::Update runs,
+	   m_bFirstPerson is set, UpdateFirstPersonView is reached and computes the
+	   right camera every frame -- the device log confirms all four -- and then
+	   the client throws it away in favour of a camera the cut scene left behind.
+	   It is also why the camera sits still in mid air, and why the player's own
+	   body is in shot: an external camera sees him. */
+	if (!m_playingSequences.empty())
+		return;
+	SCameraParams CamParams = GetCameraParams();
+	if (!CamParams.nCameraId && !CamParams.cameraNode)
+		return;
+	CamParams.cameraNode = NULL;
+	CamParams.nCameraId = 0;
+	SetCameraParams(CamParams);
+	if (m_system && m_system->GetILog())
+		m_system->GetILog()->LogToFile(
+			"\001[VITA][MOVIE] no sequence playing -- camera released back to the player");
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -693,6 +728,11 @@ void CMovieSystem::Update( float dt )
 			--m_nOpenCutScenes;
 		}
 	}
+
+	/* Same safety net for the camera.  A sequence dropped out of
+	   m_playingSequences by any route other than StopSequence would otherwise
+	   leave the view pinned to its camera permanently. */
+	ReleaseCameraIfIdle();
 
 	/* Second safety valve, for the case the one above cannot catch: a sequence
 	   that is still "playing" but is never going to finish, or one whose camera

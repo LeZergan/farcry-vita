@@ -84,6 +84,9 @@ public:
 	void StopSequence( const char *sequence );
 	void StopSequence( IAnimSequence *seq );
 	void StopAllSequences();
+	//! Clear the sequence-assigned view camera once nothing is playing, so the
+	//! client stops preferring it over the player's own.
+	void ReleaseCameraIfIdle();
 	void StopAllCutScenes();
 	void Pause( bool bPause );
 
