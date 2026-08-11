@@ -220,6 +220,7 @@ CPlayer::CPlayer(CXGame *pGame) :
 	m_bFirstPersonLoaded = true;
 #if defined(__vita__)
 	m_bVitaUpdatedSinceLastCheck = false;
+	m_bVitaReachedViewUpdate = false;
 #endif
 
 	m_bLightOn = false;
@@ -885,6 +886,14 @@ void CPlayer::Update()
 	   function is even reached for the local player has to stop being an
 	   assumption.  CXGame::Update reads and clears this. */
 	m_bVitaUpdatedSinceLastCheck = true;
+	/* Entering Update is not the same as reaching the view update, and the
+	   difference is the whole bug.  Update has two early returns ahead of the
+	   camera branch -- the dead player, and m_bHideLocalPlayer -- and the log
+	   says hideLocal is set for a third of a session.  On those frames Update
+	   runs, so a stand-in keyed on "did Update run" stands down, and yet
+	   UpdateFirstPersonView is never reached and nothing places the camera.
+	   Record the stage actually reached, not merely that the function started. */
+	m_bVitaReachedViewUpdate = false;
 
 	/* Put the local player into first person and stop his body being drawn.
 	   m_bFirstPerson starts false (third person) and on a level started fresh
@@ -1151,6 +1160,9 @@ m_AreaUser.SetEntity( GetEntity());
 	if (!m_bIsAI)
 	{
 		// Only for local player.
+#if defined(__vita__)
+		m_bVitaReachedViewUpdate = true;
+#endif
 		if (m_bFirstPerson)
 		{
 			m_pEntity->SetRegisterInSectors(false);

@@ -671,6 +671,8 @@ public:
 	    at all.  This lets the game loop -- which does run every frame -- see
 	    whether it did, report it, and stand in for it when it did not. */
 	bool m_bVitaUpdatedSinceLastCheck;
+	//! Whether Update got past its early returns as far as the camera branch.
+	bool m_bVitaReachedViewUpdate;
 	//! Put the local player in first person; optionally drive the camera too.
 	void VitaEnsureFirstPerson(bool bDriveCamera);
 #endif

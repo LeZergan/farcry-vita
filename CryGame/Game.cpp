@@ -1077,23 +1077,31 @@ bool CXGame::Update()
 			pMyPlayerEntity->GetContainer()->QueryContainerInterface(CIT_IPLAYER, (void **)&pLocalPlayer);
 
 		bool bPlayerUpdated = false;
+		bool bViewDriven = false;
 		if (pLocalPlayer)
 		{
 			bPlayerUpdated = pLocalPlayer->m_bVitaUpdatedSinceLastCheck;
 			pLocalPlayer->m_bVitaUpdatedSinceLastCheck = false;
+			/* What matters is whether the camera branch was reached, not whether
+			   Update was entered.  Keying the stand-in on the latter made it dead
+			   code: the log has updateRan=1 on 99 of 103 samples, so it never once
+			   fired, while hideLocal was set on a third of them -- exactly the
+			   frames where Update returns early and nothing places the camera. */
+			bViewDriven = pLocalPlayer->m_bVitaReachedViewUpdate;
 		}
 
 		static unsigned s_nViewReportCounter = 0;
 		if ((s_nViewReportCounter++ % 120) == 0 && m_pLog)
-			m_pLog->LogToFile("\001[VITA][VIEW] entity=%p player=%p updateRan=%d needUpdate=%d firstPerson=%d vehicle=%p isMine=%d hideLocal=%d pause=%d",
+			m_pLog->LogToFile("\001[VITA][VIEW] entity=%p player=%p updateRan=%d viewDriven=%d needUpdate=%d firstPerson=%d vehicle=%p isMine=%d hideLocal=%d pause=%d",
 				(void *)pMyPlayerEntity, (void *)pLocalPlayer, bPlayerUpdated ? 1 : 0,
+				bViewDriven ? 1 : 0,
 				pMyPlayerEntity ? (pMyPlayerEntity->NeedUpdate() ? 1 : 0) : -1,
 				pLocalPlayer ? (pLocalPlayer->m_bFirstPerson ? 1 : 0) : -1,
 				pLocalPlayer ? (void *)pLocalPlayer->GetVehicle() : (void *)0,
 				pLocalPlayer ? (pLocalPlayer->IsMyPlayer() ? 1 : 0) : -1,
 				m_bHideLocalPlayer ? 1 : 0, bPause ? 1 : 0);
 
-		if (pLocalPlayer && !bPlayerUpdated)
+		if (pLocalPlayer && !bViewDriven)
 		{
 			/* Wake the local player.  CEntity::Reset puts every entity to sleep
 			   unconditionally, and an entity that is asleep is skipped by the
