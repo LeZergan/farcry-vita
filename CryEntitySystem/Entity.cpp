@@ -1977,12 +1977,32 @@ void CEntity::UpdateAIObject( bool bEntityVisible )
 	if (!m_pEntitySystem->m_pUpdateAI->GetIVal())
 		return;
 
-	if ( m_pHeadBone )
+	/* A head bone that yields a non-finite position must not be used.  SetPos
+	   and SetEyeHeight both reject NaN and return, so the AI object keeps
+	   whatever position it last had -- usually the origin, because the very
+	   first update was already bad.  The AI then reasons about every character
+	   as if it were standing at 0,0,0: it cannot see, path or aim, so the
+	   characters just stand there, which reads on screen as them never
+	   animating.  The engine already has the right answer for a character with
+	   no usable head bone one branch down; take it rather than feeding NaN in
+	   and losing the position entirely. */
+	bool bHeadBoneUsable = m_pHeadBone != 0;
+	Vec3d vHeadPos(0, 0, 0);
+	if (bHeadBoneUsable)
+	{
+		vHeadPos = m_pHeadBone->GetBonePosition();
+		// Same test CAIObject::SetPos itself applies, made before the value is
+		// committed rather than after it has already cost us the update.
+		if (_isnan(vHeadPos.x) || _isnan(vHeadPos.y) || _isnan(vHeadPos.z))
+			bHeadBoneUsable = false;
+	}
+
+	if ( bHeadBoneUsable )
 		//	if (m_pHeadBone && (m_pCryCharInstance[0]->GetFlags() & CS_FLAG_DRAW_MODEL))
 	{
 		Vec3d pos;
 		Vec3d angles = m_angles;
-		pos = m_pHeadBone->GetBonePosition();
+		pos = vHeadPos;
 
 
 //		// if bound - in vehicle - force eyeheight to make it more noticable
