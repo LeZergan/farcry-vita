@@ -1202,7 +1202,31 @@ static bool EnsureGLVertexBuffer(CVertexBuffer *src)
 		g_nGLBufferBytesUsed += nBytes;
 	}
 	glBindBuffer(GL_ARRAY_BUFFER, src->m_nGLVBO);
+	while (glGetError() != GL_NO_ERROR) {}	// start from a known-clean error state
 	glBufferData(GL_ARRAY_BUFFER, nBytes, pData, GL_STATIC_DRAW);
+	/* Our own byte counter only knows what we asked for; the driver has its own
+	   pools and can refuse before that ceiling is reached.  An upload that fails
+	   leaves the buffer object empty, and drawing from an empty buffer renders
+	   nothing at all -- geometry silently disappearing is far worse than the
+	   copy path this exists to avoid.  Give the memory back and fall back. */
+	if (glGetError() != GL_NO_ERROR)
+	{
+		GLuint nDead = (GLuint)src->m_nGLVBO;
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glDeleteBuffers(1, &nDead);
+		src->m_nGLVBO = 0;
+		src->m_nGLVBOVerts = 0;
+		if (g_nGLBufferBytesUsed >= nBytes)
+			g_nGLBufferBytesUsed -= nBytes;
+		static bool s_bReportedUploadFail = false;
+		if (!s_bReportedUploadFail && iLog)
+		{
+			s_bReportedUploadFail = true;
+			iLog->LogToFile("\001[VITA][PERF] GPU buffer upload refused by the driver at %u KB -- "
+				"falling back to client memory for the rest", g_nGLBufferBytesUsed / 1024u);
+		}
+		return false;
+	}
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	src->m_nGLVBOVerts = src->m_NumVerts;
 	src->m_bGLDirty = false;
@@ -1228,7 +1252,20 @@ static bool EnsureGLIndexBuffer(SVertexStream *inds)
 		g_nGLBufferBytesUsed += nBytes;
 	}
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, inds->m_nGLIBO);
+	while (glGetError() != GL_NO_ERROR) {}
 	glBufferData(GL_ELEMENT_ARRAY_BUFFER, nBytes, inds->m_VData, GL_STATIC_DRAW);
+	// Same as the vertex side: an empty index buffer draws nothing.
+	if (glGetError() != GL_NO_ERROR)
+	{
+		GLuint nDead = (GLuint)inds->m_nGLIBO;
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+		glDeleteBuffers(1, &nDead);
+		inds->m_nGLIBO = 0;
+		inds->m_nGLIBOItems = 0;
+		if (g_nGLBufferBytesUsed >= nBytes)
+			g_nGLBufferBytesUsed -= nBytes;
+		return false;
+	}
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 	inds->m_nGLIBOItems = inds->m_nItems;
 	inds->m_bGLDirty = false;
