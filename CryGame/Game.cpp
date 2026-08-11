@@ -1085,15 +1085,36 @@ bool CXGame::Update()
 
 		static unsigned s_nViewReportCounter = 0;
 		if ((s_nViewReportCounter++ % 120) == 0 && m_pLog)
-			m_pLog->LogToFile("\001[VITA][VIEW] entity=%p player=%p updateRan=%d firstPerson=%d vehicle=%p isMine=%d hideLocal=%d pause=%d",
+			m_pLog->LogToFile("\001[VITA][VIEW] entity=%p player=%p updateRan=%d needUpdate=%d firstPerson=%d vehicle=%p isMine=%d hideLocal=%d pause=%d",
 				(void *)pMyPlayerEntity, (void *)pLocalPlayer, bPlayerUpdated ? 1 : 0,
+				pMyPlayerEntity ? (pMyPlayerEntity->NeedUpdate() ? 1 : 0) : -1,
 				pLocalPlayer ? (pLocalPlayer->m_bFirstPerson ? 1 : 0) : -1,
 				pLocalPlayer ? (void *)pLocalPlayer->GetVehicle() : (void *)0,
 				pLocalPlayer ? (pLocalPlayer->IsMyPlayer() ? 1 : 0) : -1,
 				m_bHideLocalPlayer ? 1 : 0, bPause ? 1 : 0);
 
 		if (pLocalPlayer && !bPlayerUpdated)
+		{
+			/* Wake the local player.  CEntity::Reset puts every entity to sleep
+			   unconditionally, and an entity that is asleep is skipped by the
+			   entity system entirely -- so its container never updates.  The only
+			   thing that re-arms the player is m_pEntity->SetNeedUpdate(true) at
+			   the top of CPlayer::Update, which cannot run because the entity is
+			   asleep: once it lapses, nothing ever wakes it again.  The one other
+			   wake-up, in the reset above, calls GetMyPlayer() at a point where
+			   the client has not been told its player id yet, so it resolves to
+			   null and does nothing.
+
+			   That is why there is no first person, no HUD and no player
+			   animation at the same time -- all three are downstream of
+			   CPlayer::Update, and none of them is separately broken.
+
+			   Re-arm only when Update genuinely did not run, so a healthy frame
+			   is left exactly as it was. */
+			if (pMyPlayerEntity)
+				pMyPlayerEntity->SetNeedUpdate(true);
 			pLocalPlayer->VitaEnsureFirstPerson(!m_bHideLocalPlayer && !bPause);
+		}
 	}
 
 	/* Four separate things gate the HUD, and if any one of them is off the
