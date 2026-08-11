@@ -384,6 +384,21 @@ namespace VitaMaterial
 		return NameContains(shaderName, "no_draw") || NameContains(shaderName, "nodraw");
 	}
 
+	/*! Water surfaces carry no diffuse map at all -- the retail water shaders
+	    (TerrainWater_OnlySky, TerrainWaterBeach, the ocean circle) build their
+	    colour from a reflection and a sky sample, neither of which exists on
+	    this fixed-function path.  With no texture the untextured fallback paints
+	    them solid white, and they are large surfaces, so the result is the sheets
+	    of blown-out white across the level rather than water.  Tint them instead:
+	    still not real water, but the right colour and translucent, which reads as
+	    water instead of as a hole in the world. */
+	inline bool IsWaterSurface(const char *shaderName)
+	{
+		if (!shaderName || !shaderName[0])
+			return false;
+		return NameContains(shaderName, "water") || NameContains(shaderName, "ocean");
+	}
+
 	//! Shader templates whose geometry is alpha-cut-out foliage or similar.
 	inline bool NeedsAlphaTest(const char *shaderName)
 	{

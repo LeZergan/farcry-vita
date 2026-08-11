@@ -941,6 +941,13 @@ void CVitaRenderer::MakeCurrent() { }
    path then ignores the mesh's vertex colours, because those are what the
    surface would otherwise be painted with -- see CVitaRenderer::SetWhiteTexture. */
 static bool g_bUntexturedSurface = false;
+/* Flat tint for a surface that has no diffuse and should not be painted white
+   -- water, whose retail shaders build their colour from a reflection and a sky
+   sample this fixed-function path cannot produce.  Applied through the same
+   glColor4f the untextured branch already uses, because SetMaterialColor on this
+   renderer is a stub and never reaches GL. */
+static bool g_bSurfaceTintActive = false;
+static float g_arrSurfaceTint[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 
 /* SetTexture runs once per material chunk -- thousands of times a frame -- and
    re-binding the texture that is already bound still makes vitaGL re-validate
@@ -1018,7 +1025,7 @@ static void SetupVertexArraysForFormat(const byte *pBase, int nVertexFormat, boo
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glVertexPointer(3, GL_FLOAT, nStride, pBase);
 
-	if (tbl.OffsColor && !g_bUntexturedSurface && !bUnlitColours)
+	if (tbl.OffsColor && !g_bUntexturedSurface && !bUnlitColours && !g_bSurfaceTintActive)
 	{
 		glEnableClientState(GL_COLOR_ARRAY);
 		glColorPointer(4, GL_UNSIGNED_BYTE, nStride, pBase + tbl.OffsColor);
@@ -1026,7 +1033,10 @@ static void SetupVertexArraysForFormat(const byte *pBase, int nVertexFormat, boo
 	else
 	{
 		glDisableClientState(GL_COLOR_ARRAY);
-		glColor4f(1, 1, 1, 1);
+		if (g_bSurfaceTintActive)
+			glColor4f(g_arrSurfaceTint[0], g_arrSurfaceTint[1], g_arrSurfaceTint[2], g_arrSurfaceTint[3]);
+		else
+			glColor4f(1, 1, 1, 1);
 	}
 
 	if (tbl.OffsTC)
@@ -3458,6 +3468,29 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 					loaded = EF_LoadTexture(fullName.c_str(), diffuse->m_TU.GetTexFlags(),
 						diffuse->m_TU.GetTexFlags2(), eTT_Base, 1.0f, 1.0f, -1, -1);
 				}
+				/* A rooted name that misses is not the end of it.  The device log
+				   has the crate material naming "Objects\Indoor\crates\crate2.dds"
+				   while its own folder is "Objects\Indoor\boxes\crates\" -- the
+				   name is rooted, so the composition above is skipped, and the
+				   rooted path does not exist because the asset actually sits under
+				   boxes/.  The folder recorded on the material is the reliable part
+				   in that situation, so try it against the bare file name too.
+				   Only after the name as authored has already failed, so a correct
+				   rooted path still wins and this costs nothing for it. */
+				if (!loaded)
+				{
+					const size_t nSlash = textureName.find_last_of("/\\");
+					if (nSlash != std::string::npos)
+					{
+						std::string fullName = sr->m_TexturePath.c_str();
+						if (!fullName.empty() &&
+							fullName[fullName.size()-1] != '/' && fullName[fullName.size()-1] != '\\')
+							fullName += '/';
+						fullName += textureName.substr(nSlash + 1);
+						loaded = EF_LoadTexture(fullName.c_str(), diffuse->m_TU.GetTexFlags(),
+							diffuse->m_TU.GetTexFlags2(), eTT_Base, 1.0f, 1.0f, -1, -1);
+					}
+				}
 			}
 			diffuse->m_TU.m_ITexPic = loaded;
 			if (!loaded)
@@ -3486,6 +3519,21 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 			   the ocean plane, anything the 3D engine queues rather than draws
 			   itself) was silently rendering pure white with nothing naming it. */
 			SetWhiteTexture();
+			/* Except water, which legitimately has no diffuse to find.  The log
+			   names TerrainWater_OnlySky, TerrainWaterBeach and the outdoor water
+			   circle with diffuse=<null>, and those are big surfaces -- painted
+			   white they are the sheets of blown-out white across the level.
+			   Give them a translucent blue-green instead of leaving them at the
+			   untextured default. */
+			if (VitaMaterial::IsWaterSurface(vitaShaderName))
+			{
+				g_bSurfaceTintActive = true;
+				g_arrSurfaceTint[0] = 0.16f; g_arrSurfaceTint[1] = 0.34f;
+				g_arrSurfaceTint[2] = 0.40f; g_arrSurfaceTint[3] = 0.72f;
+				renderState &= ~GS_DEPTHWRITE;
+				renderState |= (GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA);
+				SetState(renderState);
+			}
 			static std::map<std::string, bool> s_reportedWhite;
 			std::string key = (ef && ef->GetName()) ? ef->GetName() : "<null-shader>";
 			key += "|";
@@ -3573,6 +3621,9 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 		DrawBuffer(leaf->m_pVertexBuffer, &leaf->m_Indices, chunk->nNumIndices,
 			chunk->nFirstIndexId, leaf->m_nPrimetiveType, chunk->nFirstVertId,
 			chunk->nFirstVertId + chunk->nNumVerts, chunk);
+		// Cleared immediately: a tint left set would recolour every later draw
+		// that has no vertex colours of its own.
+		g_bSurfaceTintActive = false;
 		if (hasObjectTransform)
 			PopMatrix();
 
