@@ -3496,9 +3496,20 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 		bool bLightMapBound = false;
 		if (obj && obj->m_pLMTCBufferO && LightMapsEnabled())
 		{
+			/* Take the lightmap from the render object, not from the material.
+			   sr->m_Textures[EFTT_LIGHTMAP] is the material's own lightmap slot
+			   and Far Cry does not use it for baked brush lighting -- the baked
+			   map is a per-brush texture the 3D engine hands down on the object
+			   as m_nLMId (CStatObj::Render fills it from
+			   RenderLMData::GetColorLerpTex).  Reading the material slot meant
+			   lmTex was 0 for every brush in the level, so the whole pass below
+			   was skipped every time and no baked lighting was ever applied,
+			   however well the coordinates had been resampled to reach it.  Keep
+			   the material slot as a fallback for anything that does use it. */
 			SEfResTexture *lmTexture = sr ? sr->m_Textures[EFTT_LIGHTMAP] : NULL;
-			const int lmTex = (lmTexture && lmTexture->m_TU.m_ITexPic)
-				? lmTexture->m_TU.m_ITexPic->GetTextureID() : 0;
+			int lmTex = (obj && obj->m_nLMId > 0) ? obj->m_nLMId : 0;
+			if (!lmTex && lmTexture && lmTexture->m_TU.m_ITexPic)
+				lmTex = lmTexture->m_TU.m_ITexPic->GetTextureID();
 			CVertexBuffer *lmVB = obj->m_pLMTCBufferO->m_pVertexBuffer;
 			const byte *lmData = lmVB ? (const byte *)lmVB->m_VS[VSF_GENERAL].m_VData : NULL;
 			/* The coordinate array is indexed here by the primary buffer's
