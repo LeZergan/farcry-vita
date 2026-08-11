@@ -729,7 +729,19 @@ bool CEntity::LoadCharacter( int pos,const char *filename )
 	  m_pCryCharInstance[pos]->SetFlags(m_pCryCharInstance[pos]->GetFlags() | CS_FLAG_UPDATE);
 
 		  
-		m_pHeadBone = m_pCryCharInstance[0]->GetBoneByName("Bip01 Head");
+		/* Slot 0, not "whichever slot was just loaded".  This reached into
+		   m_pCryCharInstance[0] unconditionally while loading into slot pos, so
+		   loading a secondary slot before the main one dereferences a null
+		   character, and the bone it hands back belongs to a different instance
+		   than the one being set up.  m_pHeadBone is a raw pointer into that
+		   instance's own bone array and CryBone::getMatrixGlobal turns it back
+		   into an index by pointer subtraction against that array -- point it at
+		   another instance's bone and the subtraction produces a nonsense index
+		   and reads whatever is past the end of the matrices.  That is where the
+		   non-finite head positions behind the "NotANumber ... position of AI
+		   entity" warnings come from. */
+		if (m_pCryCharInstance[0])
+			m_pHeadBone = m_pCryCharInstance[0]->GetBoneByName("Bip01 Head");
   }
 	
 	m_pISystem->GetI3DEngine()->FreeEntityRenderState(this);
