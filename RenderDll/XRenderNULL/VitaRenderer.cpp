@@ -620,6 +620,16 @@ void CVitaRenderer::BeginFrame()
 	if (g_nLazyTextureBudgetThisFrame > kMaxLazyTextureLoadsPerFrame)
 		g_nLazyTextureBudgetThisFrame = kMaxLazyTextureLoadsPerFrame;
 	glViewport(m_nViewportX, m_nViewportY, m_nViewportWidth, m_nViewportHeight);
+	/* Start every frame unclipped.  Nothing here turned the scissor test off,
+	   and the only thing that ever does is a caller passing an all-zero
+	   rectangle -- so a HUD element that sets a scissor and does not restore it
+	   (a script that returns early, or one whose restoring call never runs)
+	   leaves the test enabled for good.  From that point on every draw in every
+	   later frame is clipped to that one rectangle, and because glClear obeys
+	   the scissor as well, the clear below stops covering the screen too: the
+	   rest of the framebuffer keeps whatever was in it.  A frame beginning is
+	   the definition of "no clip region is in effect yet". */
+	glDisable(GL_SCISSOR_TEST);
 	glDepthMask(GL_TRUE);
 	glClearColor(m_vClearColor.x, m_vClearColor.y, m_vClearColor.z, 1.0f);
 	glClearDepthf(1.0f);
