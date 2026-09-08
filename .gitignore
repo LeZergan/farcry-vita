@@ -1,0 +1,25 @@
+# Local tools, retail data, and generated output
+/.claude/
+/vita3k/
+/farcry data/
+**/build*/
+**/__pycache__/
+/engine_port/artifacts/
+/engine_port/device_*
+/engine_port/vita3k_Log*
+/engine_port/vita_kit/ux0_data/
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.exe
+*.so
+*.so.*
+*.vpk
+*.self
+*.bin
+*.sfo
+*.pdb
+*.pak
+*.log
