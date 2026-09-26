@@ -9,6 +9,7 @@
 
 #if defined(LINUX)
 #include <vitaGL.h>
+#include "VitaFixedFunction.h"
 #include <psp2/kernel/processmgr.h>
 #include <CRESky.h>
 #include <CREDummy.h>
@@ -191,6 +192,20 @@ static inline void VitaSetConstantColor(float r, float g, float b, float a)
 	g_arrVitaConstantColor[1] = g;
 	g_arrVitaConstantColor[2] = b;
 	g_arrVitaConstantColor[3] = a;
+}
+
+static float g_arrVitaMaterialColor[4] = {1, 1, 1, 1};
+static bool g_bVitaCustomColorOp = false;
+
+// Immediate world submissions own their material state. Engine effect draws
+// can then select a combiner without SetTexture silently replacing it.
+void VitaResetFixedFunctionMaterial()
+{
+	g_bVitaCustomColorOp = false;
+	for (int i = 0; i < 4; ++i)
+		g_arrVitaMaterialColor[i] = 1.0f;
+	glActiveTexture(GL_TEXTURE0);
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 }
 
 /* Secondary fixed-function textures (baked lighting and terrain detail) alter
@@ -928,6 +943,7 @@ void CVitaRenderer::BeginFrame()
 	/* Never carry a secondary texture stage across frame boundaries.  Within a
 	   frame it is retained between adjacent baked-lightmapped draws. */
 	VitaDisableLightMapStage();
+	VitaResetFixedFunctionMaterial();
 	/* Vita: real frame clear. This and Update()'s swap below are the
 	   first genuine on-screen output driven by the actual engine, not a
 	   standalone test -- everything else in this class is a mechanical
@@ -1579,7 +1595,7 @@ static void SetupVertexArraysForFormat(const byte *pBase, int nVertexFormat,
 		if (g_bSurfaceTintActive)
 			VitaSetConstantColor(g_arrSurfaceTint[0], g_arrSurfaceTint[1], g_arrSurfaceTint[2], g_arrSurfaceTint[3]);
 		else
-			VitaSetConstantColor(1, 1, 1, 1);
+			VitaSetConstantColor(g_arrVitaMaterialColor[0], g_arrVitaMaterialColor[1], g_arrVitaMaterialColor[2], g_arrVitaMaterialColor[3]);
 	}
 
 	if (g_nVitaPointerArrayBuffer == nArrayBuffer &&
@@ -2076,7 +2092,7 @@ static void DrawVitaMappedGeometry(CVertexBuffer *src, SVertexStream *inds,
 		if (g_bSurfaceTintActive)
 			VitaSetConstantColor(g_arrSurfaceTint[0], g_arrSurfaceTint[1], g_arrSurfaceTint[2], g_arrSurfaceTint[3]);
 		else
-			VitaSetConstantColor(1, 1, 1, 1);
+			VitaSetConstantColor(g_arrVitaMaterialColor[0], g_arrVitaMaterialColor[1], g_arrVitaMaterialColor[2], g_arrVitaMaterialColor[3]);
 	}
 
 	if (g_pVitaMappedPointerBuffer != src ||
@@ -2646,7 +2662,8 @@ void CVitaRenderer::SetTexture(int tnum, ETexType Type)
 		if ((GLuint)tnum != g_nBoundTexture0)
 		{
 			glBindTexture(GL_TEXTURE_2D, (GLuint)tnum);
-			glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+			if (!g_bVitaCustomColorOp)
+				glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 			g_nBoundTexture0 = (GLuint)tnum;
 		}
 	}
@@ -2733,7 +2750,7 @@ static GLenum GSBlendDstToGL(int nState)
    test/write and alpha test, the flags terrain/basic opaque geometry
    actually sets (see CryCommon/IRenderer.h's GS_* for the full set this
    doesn't cover yet, e.g. stencil/texgen -- honest scope cut, not silently
-   ignored: SetColorOp/SetTexgen/EnableFog etc remain their own separate,
+   ignored: SetTexgen/EnableFog etc remain their own separate,
    still-stubbed entry points). */
 void CVitaRenderer::SetState(int State)
 {
@@ -2903,6 +2920,7 @@ void CVitaRenderer::Draw2dText(float posX, float posY, const char * szText, SDra
 void CVitaRenderer::Draw2dImage(float xpos, float ypos, float w, float h, int texture_id, float s0, float t0, float s1, float t1, float angle, float r, float g, float b, float a, float z)
 {
 #if defined(LINUX)
+	VitaResetFixedFunctionMaterial();
 	/* Script and movie code can feed this API directly.  Reject degenerate or
 	   non-finite geometry before it reaches vitaGL: NaNs in a client vertex
 	   array are undefined for the fixed-function compiler and can poison the
@@ -3370,6 +3388,7 @@ void CVitaRenderer::EF_AddPolyToScene3D(int Ef, int numPts, SColorVert * verts, 
 CCObject * CVitaRenderer::EF_AddSpriteToScene(int Ef, int numPts, SColorVert * verts, CCObject * obj, byte * inds, int ninds, int nFogID)
 {
 #if defined(LINUX)
+	VitaResetFixedFunctionMaterial();
 	if (!verts || numPts < 3)
 		return obj;
 	/* Reused across calls rather than built fresh each time.  This is the
@@ -4987,6 +5006,7 @@ void CVitaRenderer::EF_AddEf(int NumFog, CRendElement * re, IShader * ef, SRende
 		return;
 	if (re->mfGetType() == eDATA_OcLeaf)
 	{
+		VitaResetFixedFunctionMaterial();
 		CREOcLeaf *leafElement = static_cast<CREOcLeaf *>(re);
 		CLeafBuffer *leaf = leafElement->m_pBuffer;
 		CMatInfo *chunk = leafElement->m_pChunk;
@@ -5557,7 +5577,14 @@ void CVitaRenderer::EnableTexGen(bool enable) { }
 void CVitaRenderer::SetTexgen(float scaleX, float scaleY, float translateX, float translateY) { }
 void CVitaRenderer::SetTexgen3D(float x1, float y1, float z1, float x2, float y2, float z2) { }
 void CVitaRenderer::SetLodBias(float value) { }
-void CVitaRenderer::SetColorOp(byte eCo, byte eAo, byte eCa, byte eAa) { }
+void CVitaRenderer::SetColorOp(byte eCo, byte eAo, byte eCa, byte eAa)
+{
+#if defined(LINUX)
+	glActiveTexture(GL_TEXTURE0);
+	VitaFixedFunction::ApplyColorOp(eCo, eAo, eCa, eAa, g_arrVitaMaterialColor);
+	g_bVitaCustomColorOp = true;
+#endif
+}
 void CVitaRenderer::EnableVSync(bool enable) { }
 void CVitaRenderer::EnableTMU(bool enable) { }
 void CVitaRenderer::SelectTMU(int tnum) { }
@@ -5711,6 +5738,7 @@ void CVitaRenderer::TextToScreenColor(int x, int y, float r, float g, float b, f
 void CVitaRenderer::ResetToDefault()
 {
 #if defined(LINUX)
+	VitaResetFixedFunctionMaterial();
 	glDisable(GL_BLEND);
 	glDisable(GL_ALPHA_TEST);
 	glDisable(GL_SCISSOR_TEST);
@@ -5723,7 +5751,18 @@ void CVitaRenderer::ResetToDefault()
 #endif
 }
 int CVitaRenderer::GenerateAlphaGlowTexture(float k) { return 0; }
-void CVitaRenderer::SetMaterialColor(float r, float g, float b, float a) { }
+void CVitaRenderer::SetMaterialColor(float r, float g, float b, float a)
+{
+#if defined(LINUX)
+	g_arrVitaMaterialColor[0] = r;
+	g_arrVitaMaterialColor[1] = g;
+	g_arrVitaMaterialColor[2] = b;
+	g_arrVitaMaterialColor[3] = a;
+	glActiveTexture(GL_TEXTURE0);
+	glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, g_arrVitaMaterialColor);
+	VitaSetConstantColor(r, g, b, a);
+#endif
+}
 int CVitaRenderer::LoadAnimatedTexture(const char * format, const int nCount) { return 0; }
 void CVitaRenderer::RemoveAnimatedTexture(AnimTexInfo * pInfo) { }
 AnimTexInfo * CVitaRenderer::GetAnimTexInfoFromId(int nId) { return 0; }
@@ -6168,6 +6207,7 @@ void CVitaRenderer::Set2DMode(bool enable, int ortox, int ortoy)
 		g_fVita2DModeScaleY = ortoy > 0 ? (float)ortoy / 600.0f : 1.0f;
 		if (bOutermost)
 		{
+			VitaResetFixedFunctionMaterial();
 			s_oldFog = glIsEnabled(GL_FOG);
 			s_oldDepth = glIsEnabled(GL_DEPTH_TEST);
 			s_oldBlend = glIsEnabled(GL_BLEND);

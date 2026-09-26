@@ -4,7 +4,30 @@ Inspected 2026-09-26, branch `Android`, commit
 `82b2aca74e3f7904cf61ae72f69cef9ba614ea9f` of
 [Player124413/NearChuckle-android-edition](https://github.com/Player124413/NearChuckle-android-edition).
 Source inspection only: this session did not build or run the Android port.
-No implementation code was imported from it.
+The first focused adaptation now reuses its inherited Crytek fixed-function
+texture combiner in `engine_port/VitaFixedFunction.h`. Original engine and
+OpenGL backend files remain intact.
+
+## First adaptation: material color and blending
+
+`CGLRenderer::EF_SetColorOp` from the pinned Android pipeline provides the
+existing operation/packed-argument mapping. The Vita helper uses the core enum
+names supported by our pinned vitaGL, receives material color directly, and
+reapplies state because Vita's immediate paths also write GL state. It preserves
+the selected interpolation alpha source after decoding packed arguments.
+
+The Vita adapter now implements `SetColorOp` and `SetMaterialColor`, preserves
+effect combiners when binding a texture, and retains material color for geometry
+without vertex colors. Immediate world and HUD submissions explicitly start
+with default modulation so effect state does not become their default.
+This covers existing fixed-function semantics; it does not implement the full
+shader pipeline, shader-only operations, or texture-unit selection.
+
+`python -S engine_port/tests/validate_fixed_function.py` compiles CPU checks
+using actual engine enums and pinned SDK constants. It checks decal constants,
+independent RGB/alpha arguments, scale reset, interpolation and the 255 sentinel.
+The canonical release build and package verification passed. No device or
+emulator run was performed; visual improvements remain unverified.
 
 ## Recommended order
 
@@ -75,10 +98,10 @@ equivalent hardware evidence into one readable report.
 GitHub reports no repository-wide license metadata, and the inspected root has
 no standalone LICENSE. Original source headers identify Crytek; decoder and
 other bundled components carry their own notices. Establish the terms applicable
-to a specific authored patch before copying it. This assessment recommends
-behavioral comparisons and locally authored adaptations in the meantime.
+to a specific authored patch before copying it. The first adaptation above uses
+inherited Crytek code with its notice and original SDK terms preserved.
 
-Best next renderer task: capture one reproducible bad surface with the exact
+When device testing resumes, capture one reproducible bad surface with the exact
 eboot hash, then compare its material, texture format, UV sets and blend stages
 against the reference pipeline. Best small standalone feature: a read-only
 game-data preflight with specific missing-file messages. Neither requires a

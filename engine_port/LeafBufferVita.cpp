@@ -24,6 +24,7 @@
 #include <VertexBufferSource.h>
 
 #if defined(LINUX)
+extern void VitaResetFixedFunctionMaterial();
 
 CLeafBuffer::CLeafBuffer(const char *szSource)
 {
@@ -93,6 +94,7 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 {
 	if (!gcpVitaRenderer || !m_pVertexBuffer)
 		return;
+	VitaResetFixedFunctionMaterial();
 	/* VolFogTopCircle is a shader-generated translucent volume cap.  Drawing
 	   its bare geometry through the white fallback produces the opaque white
 	   disc/sheet reported in gameplay.  Distance fog remains active; omit only

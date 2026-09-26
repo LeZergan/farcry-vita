@@ -2,6 +2,24 @@
 
 Prepared 2026-09-26. This is a native source port, not an Android loader.
 
+## Current focused renderer patch
+
+The Vita adapter now reuses the inherited Crytek texture combiner inspected in
+NearChuckle Android for `SetColorOp`, and implements `SetMaterialColor`.
+Original engine/OpenGL files are unchanged. See `docs/NEARCHUCKLE_REUSE.md`.
+
+The canonical release rebuild and focused fixed-function CPU checks passed.
+VPK CRC, expected three entries, and exact eboot-to-SELF match passed.
+
+- VPK SHA-256: `ab256888d0de1a471001c78ba2f68de0c8fb8fc036a5be7e1f2126d397234aa9`
+- Eboot SHA-256: `836830a680353d851eed1bccaf3e097065b848359acf90a283172f664ac7f3f8`
+- Check: `python -S engine_port/tests/validate_fixed_function.py` (host g++ required).
+
+No new Vita or emulator run was performed. The user explicitly requested no
+on-Vita tests for this work. Material state is CPU/build verified; appearance
+and performance are not runtime verified. The preparation hashes below are
+historical and identify the package before this patch.
+
 ## Preparation verification
 
 On 2026-09-26 the canonical release build completed all 522 Ninja steps on the
