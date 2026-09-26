@@ -5,6 +5,14 @@
 #include "CrySkinBase.h"
 #include "platform.h"
 
+#if defined(__vita__) || defined(LINUX)
+struct VitaSkinGatherLink
+{
+	u32 nVertex;
+	u16 nBoneAndRigid;
+};
+#endif
+
 //////////////////////////////////////////////////////////////////////////
 // the optimized skinner; built with the CrySkinBuilder class instance,
 // destroyed with the Release()
@@ -58,6 +66,13 @@ public:
 	};
 
 	friend class CStatistics;
+
+#if defined(__vita__) || defined(LINUX)
+private:
+	void buildVitaGather();
+	std::vector<unsigned> m_vitaGatherOffsets;
+	std::vector<VitaSkinGatherLink> m_vitaGatherLinks;
+#endif
 };
 
 #endif

@@ -1213,6 +1213,20 @@ ISound* CSoundSystem::LoadSound(const char *szFile, int flags)
 	if (!szFile || (!szFile[0])) 
 		return (NULL);
 
+#if defined(__vita__) || defined(LINUX)
+	/* A few retail voice scripts already include the extension and then pass
+	   through a helper that appends it again (pain_10_VoiceA.wav.wav in the
+	   device log).  Normalise only that exact duplicate suffix so the existing
+	   pak-aware asynchronous loader can find and cache the real sample. */
+	string vitaSoundName(szFile);
+	if (vitaSoundName.length() >= 8 &&
+		stricmp(vitaSoundName.c_str() + vitaSoundName.length() - 8, ".wav.wav") == 0)
+	{
+		vitaSoundName.erase(vitaSoundName.length() - 4);
+		szFile = vitaSoundName.c_str();
+	}
+#endif
+
 	//if (!strlen(szFile)) 
 	//	return (NULL);
  

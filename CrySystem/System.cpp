@@ -52,6 +52,12 @@
 #include "DataProbe.h"
 #include "ApplicationHelper.h"			// CApplicationHelper
 
+#if defined(__vita__)
+#include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/threadmgr.h>
+extern "C" unsigned int Vita_GetLastFrameDrawCallCount();
+#endif
+
 #include "CryWaterMark.h"
 WATERMARKDATA(_m);
 
@@ -72,6 +78,101 @@ ISystem* g_System = NULL;
 // hopefully someday we'll have standard MT-safe heap
 CMTSafeHeap* g_pBigHeap;
 CMTSafeHeap* g_pSmallHeap;
+
+#if defined(__vita__)
+/* CryEngine 1 performs physics synchronously before AI/entities, but the next
+   frame's physics step can be computed after those systems have submitted
+   their state and while the main thread is blocked presenting the completed
+   frame.  That interval touches no gameplay state on core 0, so this is a
+   useful, race-free pipeline rather than a helper thread that is immediately
+   joined.  The completed result is consumed at the next System::Update. */
+static SceUID g_nVitaPhysicsThread = -1;
+static SceUID g_nVitaPhysicsWorkSema = -1;
+static SceUID g_nVitaPhysicsDoneSema = -1;
+static IPhysicalWorld * volatile g_pVitaPhysicsWorld = NULL;
+static volatile float g_fVitaPhysicsStep = 0.0f;
+static volatile int g_bVitaPhysicsInFlight = 0;
+static volatile int g_bVitaPhysicsCompletedForNextUpdate = 0;
+
+static int VitaPhysicsWorkerEntry(SceSize, void *)
+{
+	for (;;)
+	{
+		sceKernelWaitSema(g_nVitaPhysicsWorkSema, 1, NULL);
+		IPhysicalWorld *pWorld = const_cast<IPhysicalWorld *>(g_pVitaPhysicsWorld);
+		const float fStep = g_fVitaPhysicsStep;
+		if (pWorld && fStep >= 0.0f)
+			pWorld->TimeStep(fStep);
+		sceKernelSignalSema(g_nVitaPhysicsDoneSema, 1);
+	}
+	return 0;
+}
+
+static bool VitaEnsurePhysicsWorker()
+{
+	if (g_nVitaPhysicsThread >= 0)
+		return true;
+	g_nVitaPhysicsWorkSema = sceKernelCreateSema("farcry_phys_work", 0, 0, 1, NULL);
+	g_nVitaPhysicsDoneSema = sceKernelCreateSema("farcry_phys_done", 0, 0, 1, NULL);
+	if (g_nVitaPhysicsWorkSema < 0 || g_nVitaPhysicsDoneSema < 0)
+	{
+		if (g_nVitaPhysicsWorkSema >= 0)
+			sceKernelDeleteSema(g_nVitaPhysicsWorkSema);
+		if (g_nVitaPhysicsDoneSema >= 0)
+			sceKernelDeleteSema(g_nVitaPhysicsDoneSema);
+		g_nVitaPhysicsWorkSema = g_nVitaPhysicsDoneSema = -1;
+		return false;
+	}
+	g_nVitaPhysicsThread = sceKernelCreateThread("farcry_physics", VitaPhysicsWorkerEntry,
+		0x10000100, 0x20000, 0, SCE_KERNEL_CPU_MASK_USER_1, NULL);
+	if (g_nVitaPhysicsThread < 0)
+	{
+		sceKernelDeleteSema(g_nVitaPhysicsWorkSema);
+		sceKernelDeleteSema(g_nVitaPhysicsDoneSema);
+		g_nVitaPhysicsWorkSema = g_nVitaPhysicsDoneSema = -1;
+		return false;
+	}
+	if (sceKernelStartThread(g_nVitaPhysicsThread, 0, NULL) < 0)
+	{
+		sceKernelDeleteThread(g_nVitaPhysicsThread);
+		sceKernelDeleteSema(g_nVitaPhysicsWorkSema);
+		sceKernelDeleteSema(g_nVitaPhysicsDoneSema);
+		g_nVitaPhysicsThread = g_nVitaPhysicsWorkSema = g_nVitaPhysicsDoneSema = -1;
+		return false;
+	}
+	if (g_System && g_System->GetILog())
+		g_System->GetILog()->Log("\001[VITA][PHYSMT] pipelined physics worker active on CPU 1");
+	return true;
+}
+
+extern "C" int Vita_PhysicsDispatch(IPhysicalWorld *pWorld, float fStep)
+{
+	if (!pWorld || fStep < 0.0f || g_bVitaPhysicsInFlight || !VitaEnsurePhysicsWorker())
+		return 0;
+	g_pVitaPhysicsWorld = pWorld;
+	g_fVitaPhysicsStep = fStep;
+	g_bVitaPhysicsInFlight = 1;
+	sceKernelSignalSema(g_nVitaPhysicsWorkSema, 1);
+	return 1;
+}
+
+extern "C" void Vita_PhysicsJoin()
+{
+	if (!g_bVitaPhysicsInFlight)
+		return;
+	sceKernelWaitSema(g_nVitaPhysicsDoneSema, 1, NULL);
+	g_bVitaPhysicsInFlight = 0;
+	g_bVitaPhysicsCompletedForNextUpdate = 1;
+}
+
+static bool VitaConsumePipelinedPhysicsStep()
+{
+	if (!g_bVitaPhysicsCompletedForNextUpdate)
+		return false;
+	g_bVitaPhysicsCompletedForNextUpdate = 0;
+	return true;
+}
+#endif
 
 #ifdef WIN32
 #pragma comment(lib, "WINMM.lib")
@@ -797,6 +898,18 @@ void CSystem::UpdateScriptSink()
 bool CSystem::Update( int updateFlags, int nPauseMode )
 {
 	FUNCTION_PROFILER( this,PROFILE_SYSTEM );
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	const SceUInt64 nVitaSystemStartUs = sceKernelGetProcessTimeWide();
+	SceUInt64 nVitaCharactersEndUs = nVitaSystemStartUs;
+	SceUInt64 nVitaMiscEndUs = nVitaSystemStartUs;
+	SceUInt64 nVitaPhysicsEndUs = nVitaSystemStartUs;
+	SceUInt64 nVitaAIEndUs = nVitaSystemStartUs;
+	SceUInt64 nVitaEntitiesEndUs = nVitaSystemStartUs;
+	SceUInt64 nVitaMovieEndUs = nVitaSystemStartUs;
+	SceUInt64 nVita3DEngineEndUs = nVitaSystemStartUs;
+	SceUInt64 nVitaSoundEndUs = nVitaSystemStartUs;
+	SceUInt64 nVitaMusicEndUs = nVitaSystemStartUs;
+#endif
 
 	if (m_pGame)
 	{
@@ -845,6 +958,9 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 
 	if (m_pICryCharManager)
 		m_pICryCharManager->Update();
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaCharactersEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	if (m_bIgnoreUpdates)
 		return true;
@@ -901,6 +1017,136 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 	float fFrameTime = m_Time.GetFrameTime();
 
 #if defined(__vita__)
+	/* Hold 30 FPS by reducing only scalable scenery/effect work when a view is
+	   persistently over budget.  A fixed worst-case preset made quiet interiors
+	   needlessly ugly, while the original static preset still collapsed in dense
+	   jungle/combat views.  This controller uses a filtered completed-frame time,
+	   steps down quickly with hysteresis, and restores quality one level at a
+	   time only after fifteen seconds of genuine headroom.  Gameplay, AI, input,
+	   collision and audio are never skipped.
+
+	   The cvar is intentionally user-visible: setting sys_vita_adaptive_quality
+	   to 0 restores the balanced baseline immediately for screenshots/testing. */
+	{
+		static int s_nAdaptiveEnabled = 1;
+		static bool s_bAdaptiveInitialized = false;
+		static ICVar *s_pAdaptiveEnabled = NULL;
+		static ICVar *s_pObjectView = NULL;
+		static ICVar *s_pObjectLod = NULL;
+		static ICVar *s_pTerrainLod = NULL;
+		static ICVar *s_pVegetationSpriteRatio = NULL;
+		static ICVar *s_pVegetationSpriteMinDistance = NULL;
+		static ICVar *s_pParticleLod = NULL;
+		static float s_fFilteredFrameTime = 1.0f / 30.0f;
+		static unsigned int s_nWarmupFrames = 180;
+		static unsigned int s_nSlowScore = 0;
+		static unsigned int s_nHeadroomFrames = 0;
+		static int s_nQualityLevel = 0;
+		/* BeginFrame publishes the renderer count from the frame that just
+		   completed.  Real-device captures show a repeatable fixed-function cliff
+		   at roughly 200 submissions, even when the CPU-side frame average has not
+		   yet caught up, so treat draw pressure as an early warning signal. */
+		const unsigned int nVitaPreviousDrawCalls = Vita_GetLastFrameDrawCallCount();
+
+		if (!s_bAdaptiveInitialized && m_pConsole)
+		{
+			s_pAdaptiveEnabled = m_pConsole->GetCVar("sys_vita_adaptive_quality");
+			if (!s_pAdaptiveEnabled)
+			{
+				m_pConsole->Register("sys_vita_adaptive_quality", &s_nAdaptiveEnabled, 1.0f, 0,
+					"Dynamically scale Vita scenery to protect the 30 FPS frame budget");
+				s_pAdaptiveEnabled = m_pConsole->GetCVar("sys_vita_adaptive_quality");
+			}
+			s_pObjectView = m_pConsole->GetCVar("e_obj_view_dist_ratio");
+			s_pObjectLod = m_pConsole->GetCVar("e_obj_lod_ratio");
+			s_pTerrainLod = m_pConsole->GetCVar("e_terrain_lod_ratio");
+			s_pVegetationSpriteRatio = m_pConsole->GetCVar("e_vegetation_sprites_distance_ratio");
+			s_pVegetationSpriteMinDistance = m_pConsole->GetCVar("e_vegetation_sprites_min_distance");
+			s_pParticleLod = m_pConsole->GetCVar("e_particles_lod");
+			s_bAdaptiveInitialized = true;
+		}
+
+		auto ApplyVitaQualityLevel = [&]()
+		{
+			static const float s_arrObjectView[5] = { 6.5f, 5.5f, 4.75f, 4.0f, 3.4f };
+			static const float s_arrObjectLod[5] = { 2.0f, 1.7f, 1.4f, 1.15f, 0.9f };
+			static const float s_arrTerrainLod[5] = { 5.0f, 6.0f, 7.5f, 9.5f, 12.0f };
+			static const float s_arrSpriteRatio[5] = { 0.15f, 0.13f, 0.11f, 0.09f, 0.07f };
+			static const float s_arrSpriteMinDistance[5] = { 4.0f, 3.75f, 3.5f, 3.25f, 3.0f };
+			static const float s_arrParticleLod[5] = { 0.40f, 0.34f, 0.28f, 0.22f, 0.16f };
+			if (s_pObjectView) s_pObjectView->Set(s_arrObjectView[s_nQualityLevel]);
+			if (s_pObjectLod) s_pObjectLod->Set(s_arrObjectLod[s_nQualityLevel]);
+			if (s_pTerrainLod) s_pTerrainLod->Set(s_arrTerrainLod[s_nQualityLevel]);
+			if (s_pVegetationSpriteRatio) s_pVegetationSpriteRatio->Set(s_arrSpriteRatio[s_nQualityLevel]);
+			if (s_pVegetationSpriteMinDistance) s_pVegetationSpriteMinDistance->Set(s_arrSpriteMinDistance[s_nQualityLevel]);
+			if (s_pParticleLod) s_pParticleLod->Set(s_arrParticleLod[s_nQualityLevel]);
+			if (m_pLog)
+				m_pLog->LogToFile("\001[VITA][ADAPT] level=%d avgMs=%.2f draws=%u view=%.2f objLod=%.2f terrainLod=%.2f particles=%.2f",
+					s_nQualityLevel, s_fFilteredFrameTime * 1000.0f, nVitaPreviousDrawCalls,
+					s_arrObjectView[s_nQualityLevel], s_arrObjectLod[s_nQualityLevel],
+					s_arrTerrainLod[s_nQualityLevel], s_arrParticleLod[s_nQualityLevel]);
+		};
+
+		const bool bAdaptiveEnabled = s_pAdaptiveEnabled ? s_pAdaptiveEnabled->GetIVal() != 0 : true;
+		if (!bAdaptiveEnabled)
+		{
+			if (s_nQualityLevel != 0)
+			{
+				s_nQualityLevel = 0;
+				ApplyVitaQualityLevel();
+			}
+			s_nSlowScore = s_nHeadroomFrames = 0;
+		}
+		else if (nPauseMode == 0 && pProcess && (pProcess->GetFlags() & PROC_3DENGINE) &&
+			!IsEquivalent(m_ViewCamera.GetPos(), Vec3(0,0,0), VEC_EPSILON))
+		{
+			if (s_nWarmupFrames > 0)
+				--s_nWarmupFrames;
+			else
+			{
+				/* Cap one pathological streaming frame's influence; repeated misses
+				   still force a fast step-down, a single asset fault does not. */
+				const float fSample = min(0.080f, max(0.010f, fFrameTime));
+				s_fFilteredFrameTime += (fSample - s_fFilteredFrameTime) * 0.08f;
+				const bool bDrawOverBudget = nVitaPreviousDrawCalls >= 200;
+				if (s_fFilteredFrameTime > 0.0370f || fFrameTime > 0.0500f || bDrawOverBudget)
+				{
+					unsigned int nPenalty = 1;
+					if (fFrameTime > 0.0660f || nVitaPreviousDrawCalls >= 260)
+						nPenalty = 3;
+					else if (nVitaPreviousDrawCalls >= 225)
+						nPenalty = 2;
+					s_nSlowScore += nPenalty;
+					if (s_nSlowScore > 96) s_nSlowScore = 96;
+					s_nHeadroomFrames = 0;
+				}
+				else
+				{
+					if (s_nSlowScore > 0) --s_nSlowScore;
+					if (s_fFilteredFrameTime < 0.0343f && nVitaPreviousDrawCalls < 180)
+						++s_nHeadroomFrames;
+					else
+						s_nHeadroomFrames = 0;
+				}
+
+				if (s_nSlowScore >= 24 && s_nQualityLevel < 4)
+				{
+					++s_nQualityLevel;
+					s_nSlowScore = s_nHeadroomFrames = 0;
+					ApplyVitaQualityLevel();
+				}
+				else if (s_nHeadroomFrames >= 450 && s_nQualityLevel > 0)
+				{
+					--s_nQualityLevel;
+					s_nSlowScore = s_nHeadroomFrames = 0;
+					ApplyVitaQualityLevel();
+				}
+			}
+		}
+	}
+#endif
+
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
 	/* One line a second describing the state that decides whether the game is
 	   actually running.  A frozen camera, characters stuck in bind pose and a
 	   cut scene that never ends all look identical from the outside and all
@@ -972,6 +1218,9 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 			m_Time.MeasureTime("TmInConUp");
 		}
 	}
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaMiscEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	//////////////////////////////////////////////////////////////////////	
 	// update physic system	
@@ -985,7 +1234,15 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 
 		int iPrevTime=m_pIPhysicalWorld->GetiPhysicsTime(), iCurTime;
 		if (!(updateFlags&ESYSUPDATE_MULTIPLAYER))
+		{
+#if defined(__vita__)
+			/* A completed step was produced during the previous present. */
+			if (!VitaConsumePipelinedPhysicsStep())
+				m_pIPhysicalWorld->TimeStep(fFrameTime);
+#else
 			m_pIPhysicalWorld->TimeStep(fFrameTime);
+#endif
+		}
 		else
 		{
 			if (m_pGame->UseFixedStep())
@@ -1020,6 +1277,9 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 		}
 		m_Time.MeasureTime("PhysicsUp");
 	}
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaPhysicsEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	if ((nPauseMode==0) && !(updateFlags&ESYSUPDATE_IGNORE_AI))
 	{
@@ -1030,6 +1290,9 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 			m_pAISystem->Update();
 		m_Time.MeasureTime("AISys Up");
 	}
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaAIEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	if ((nPauseMode!=1))
 	{
@@ -1039,6 +1302,9 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 			m_pEntitySystem->Update();
 		m_Time.MeasureTime("EntSys Up");
 	}
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaEntitiesEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	//////////////////////////////////////////////////////////////////////////
 	// Update movie system (Must be after updating EntitySystem and AI.
@@ -1048,12 +1314,24 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 		if (m_pIMovieSystem && !(updateFlags&ESYSUPDATE_EDITOR) && !bNoUpdate)
 		{
 			float fMovieFrameTime = fFrameTime;
+#if defined(__vita__)
+			/* A streaming/combat hitch must not advance a sequence by a tenth of a
+			   second in one update.  That skipped scanner beats and made rendered
+			   cutscenes finish before their animation/audio.  Preserve 30 Hz sequence
+			   progression even when one presentation frame arrives very late. */
+			if (fMovieFrameTime > 1.0f / 30.0f)
+				fMovieFrameTime = 1.0f / 30.0f;
+#else
 			if (fMovieFrameTime > 0.1f) // Slow frame rate fix.
 				fMovieFrameTime = 0.1f;
+#endif
 			m_pIMovieSystem->Update(fMovieFrameTime);
 			m_Time.MeasureTime("MovieSys");
 		}
 	}
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaMovieEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	//////////////////////////////////////////////////////////////////////
 	//update process (3D engine)
@@ -1089,6 +1367,9 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 
 
 	m_Time.MeasureTime("3DEng Up"); // I3DEngine::Update() is empty
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVita3DEngineEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	//////////////////////////////////////////////////////////////////////
 	//update sound system
@@ -1105,6 +1386,9 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
     m_pISound->Update();
 		m_Time.MeasureTime("SoundSysUp");
 	}
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaSoundEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	if (m_pIMusic && !bNoUpdate)
 	{
@@ -1113,6 +1397,9 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 		m_pIMusic->Update();
 		m_Time.MeasureTime("MusicSysUp");
 	}
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaMusicEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	if (m_pDownloadManager && !bNoUpdate)
 	{
@@ -1127,6 +1414,41 @@ bool CSystem::Update( int updateFlags, int nPauseMode )
 		if (m_pProcess && (m_pProcess->GetFlags() & PROC_3DENGINE))
 			m_nStrangeRatio += (1 + (10*rand())/RAND_MAX);
 	}
+
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	/* The outer game timing can only say "System::Update was expensive".  Keep
+	   the sub-stage evidence sparse so further 30 fps work attacks the measured
+	   subsystem instead of disabling gameplay features by guesswork. */
+	{
+		const SceUInt64 nVitaSystemEndUs = sceKernelGetProcessTimeWide();
+		static unsigned int s_nFrames = 0;
+		static SceUInt64 s_nCharactersUs = 0, s_nMiscUs = 0, s_nPhysicsUs = 0;
+		static SceUInt64 s_nAIUs = 0, s_nEntitiesUs = 0, s_nMovieUs = 0;
+		static SceUInt64 s_n3DEngineUs = 0, s_nSoundUs = 0, s_nMusicUs = 0, s_nTailUs = 0;
+		s_nCharactersUs += nVitaCharactersEndUs - nVitaSystemStartUs;
+		s_nMiscUs += nVitaMiscEndUs - nVitaCharactersEndUs;
+		s_nPhysicsUs += nVitaPhysicsEndUs - nVitaMiscEndUs;
+		s_nAIUs += nVitaAIEndUs - nVitaPhysicsEndUs;
+		s_nEntitiesUs += nVitaEntitiesEndUs - nVitaAIEndUs;
+		s_nMovieUs += nVitaMovieEndUs - nVitaEntitiesEndUs;
+		s_n3DEngineUs += nVita3DEngineEndUs - nVitaMovieEndUs;
+		s_nSoundUs += nVitaSoundEndUs - nVita3DEngineEndUs;
+		s_nMusicUs += nVitaMusicEndUs - nVitaSoundEndUs;
+		s_nTailUs += nVitaSystemEndUs - nVitaMusicEndUs;
+		if ((++s_nFrames % 120) == 0 && m_pLog)
+		{
+			m_pLog->LogToFile("\001[VITA][SYSSTAGE] avgUs chars=%u misc=%u physics=%u ai=%u entities=%u movie=%u engine3d=%u sound=%u music=%u tail=%u",
+				(unsigned)(s_nCharactersUs / 120), (unsigned)(s_nMiscUs / 120),
+				(unsigned)(s_nPhysicsUs / 120), (unsigned)(s_nAIUs / 120),
+				(unsigned)(s_nEntitiesUs / 120), (unsigned)(s_nMovieUs / 120),
+				(unsigned)(s_n3DEngineUs / 120), (unsigned)(s_nSoundUs / 120),
+				(unsigned)(s_nMusicUs / 120), (unsigned)(s_nTailUs / 120));
+			s_nCharactersUs = s_nMiscUs = s_nPhysicsUs = s_nAIUs = 0;
+			s_nEntitiesUs = s_nMovieUs = s_n3DEngineUs = 0;
+			s_nSoundUs = s_nMusicUs = s_nTailUs = 0;
+		}
+	}
+#endif
 
 	return !m_bQuit;	
 }

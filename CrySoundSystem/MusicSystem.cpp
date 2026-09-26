@@ -676,6 +676,16 @@ void CMusicSystem::Silence()
 */
 void CMusicSystem::Update()
 {
+	/* The callback that decodes/refills music runs on the Vita audio thread and
+	   holds m_CS while touching the pattern state.  Blocking here made core 0
+	   inherit 20+ ms decode bursts, visible as recurring soundtail spikes and
+	   gameplay hitches.  The ring already contains several blocks, so defer the
+	   non-audio control update by one frame when the callback is busy. */
+#if defined(__vita__) || defined(LINUX)
+	CSmartCriticalSection VitaUpdateLock(m_CS, true);
+	if (!VitaUpdateLock.IsLocked())
+		return;
+#endif
 	FlushLog();
 	if (!m_bDataLoaded)
 		return;	// no data loaded

@@ -18,6 +18,7 @@
 #define VITA_RENDERER_H
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -25,11 +26,10 @@
 # pragma once
 #endif
 
-/* Vita: real ITexPic backed by a real vitaGL texture. Uncompressed source
-   pixels remain available where CryEngine needs GetData32(); BC1/2/3 DDS
-   data stays compressed in CDRAM and has no redundant CPU-side RGBA copy.
-   No fabricated content: GetData32/GetTextureID/GetWidth/GetHeight all
-   reflect the actual decoded file. */
+/* Vita: real ITexPic backed by a real vitaGL texture. Upload staging pixels
+   are released after glTexImage2D; the Vita runtime no longer has a caller
+   that needs a persistent GetData32 copy. No fabricated content:
+   GetTextureID/GetWidth/GetHeight all reflect the actual decoded file. */
 class CVitaTexPic : public ITexPic
 {
 public:
@@ -62,7 +62,7 @@ private:
 	int m_nGLTexId;
 	int m_nWidth, m_nHeight;
 	int m_nFlags, m_nFlags2;
-	byte *m_pRGBA32; // owned, decoded RGBA8888 pixels; freed in ~CVitaTexPic
+	byte *m_pRGBA32; // optional owned CPU pixels; normally null on Vita
 	char m_szName[256];
 public:
 	~CVitaTexPic();
@@ -295,6 +295,12 @@ public:
 
 	// Called by CVitaTexPic when an external Release destroys a texture.
 	void UnregisterTexture(CVitaTexPic *pTexture);
+	/* Static brushes enter through CLeafBuffer's immediate Vita path rather
+	   than EF_AddEf.  Keep the baked-lightmap fixed-function stage here so both
+	   paths use the same unit-1 setup and, crucially, the static world does not
+	   silently fall back to diffuse-only rendering. */
+	bool BeginVitaLightMap(CCObject *pObject, CVertexBuffer *pGeometry);
+	void EndVitaLightMap();
 
 private:
 	int m_nWidth;
@@ -310,6 +316,7 @@ private:
 	int m_nFrameId;
 	Vec3 m_vClearColor;
 	int m_nActiveLights;
+	bool m_bSwapBuffersEnabled;
 
 	// Backing store for GetDynVBPtr/DrawDynVB -- CFFont::DrawStringW (see
 	// CryFont/FFont.cpp) fills this via GetDynVBPtr and submits it via
@@ -384,6 +391,33 @@ namespace VitaMaterial
 		return NameContains(shaderName, "no_draw") || NameContains(shaderName, "nodraw");
 	}
 
+	//! Collision/editor proxy slots which the desktop shader pipeline suppresses.
+	inline bool IsNoDrawMaterial(const CMatInfo &material)
+	{
+		const char *shaderName = material.shaderItem.m_pShader ?
+			material.shaderItem.m_pShader->GetName() : "";
+		if (IsNoDraw(shaderName) || IsNoDraw(material.sMaterialName) ||
+			IsNoDraw(material.sScriptMaterial))
+			return true;
+		/* These script suffixes are consumed by the physics/visibility systems;
+		   they are not visible surface shaders. */
+		if (NameContains(material.sScriptMaterial, "mat_phys") ||
+			NameContains(material.sScriptMaterial, "mat_obstruct") ||
+			NameContains(material.sScriptMaterial, "mat_occl"))
+			return true;
+		/* Far Cry's AI cover helpers use these exact material slots.  Their
+		   source path is not retained by every static-object submission, so
+		   filter the slots as well as the CGF path in EF_AddEf. */
+		if (stricmp(material.sMaterialName, "s_hard") == 0 ||
+			stricmp(material.sMaterialName, "s_soft") == 0)
+			return true;
+		/* A few old CGFs use a decal template for their proxy slot, so their only
+		   surviving marker is the material name. */
+		return NameContains(material.sMaterialName, "collision") ||
+			NameContains(material.sMaterialName, "colllision") ||
+			NameContains(material.sMaterialName, "hullproxy");
+	}
+
 	/*! Water surfaces carry no diffuse map at all -- the retail water shaders
 	    (TerrainWater_OnlySky, TerrainWaterBeach, the ocean circle) build their
 	    colour from a reflection and a sky sample, neither of which exists on
@@ -406,11 +440,43 @@ namespace VitaMaterial
 			return false;
 		static const char *kCutoutTemplates[] = {
 			"plant", "leaf", "leaves", "grass", "tree", "veget", "bush", "frond",
-			"palm", "fence", "wire", "net", "grid", "ladder", "decal", "alphatest",
-			"cloud", "corona", "flare", "hair", "detailbend"
+			"palm", "fence", "wire", "net", "grid", "ladder", "alphatest",
+			"hair", "detailbend"
 		};
 		for (size_t i = 0; i < sizeof(kCutoutTemplates) / sizeof(kCutoutTemplates[0]); ++i)
 			if (NameContains(shaderName, kCutoutTemplates[i]))
+				return true;
+		return false;
+	}
+
+	/* Fixed-function replacements for the blend directives normally supplied by
+	   CryEngine's shader scripts.  These effects are commonly authored at opacity
+	   1, so material opacity alone cannot identify them. */
+	inline bool IsModulativeShadow(const char *shaderName)
+	{
+		return NameContains(shaderName, "shadow") || NameContains(shaderName, "blob");
+	}
+
+	inline bool NeedsAdditiveBlend(const char *shaderName)
+	{
+		static const char *kAdditive[] = {
+			"muzzle", "flash", "flare", "corona", "glow", "halo", "tracer",
+			"beam", "laser", "fire", "explosion", "spark"
+		};
+		for (size_t i = 0; i < sizeof(kAdditive) / sizeof(kAdditive[0]); ++i)
+			if (NameContains(shaderName, kAdditive[i]))
+				return true;
+		return false;
+	}
+
+	inline bool NeedsAlphaBlend(const char *shaderName)
+	{
+		static const char *kTranslucent[] = {
+			"particle", "sprite", "smoke", "cloud", "dust", "steam", "fog",
+			"decal", "soft", "impact"
+		};
+		for (size_t i = 0; i < sizeof(kTranslucent) / sizeof(kTranslucent[0]); ++i)
+			if (NameContains(shaderName, kTranslucent[i]))
 				return true;
 		return false;
 	}

@@ -715,6 +715,13 @@ void CObjManager::MergeBrushes()
           newMatInfo.shaderItem = pCustMat->shaderItem;
         }
       }
+      /* Both GetTemplate calls below dereference this without checking.  A null
+         shader is a normal thing to meet here on this port: fake/NoDraw CGF
+         slots (mat_phys, collision and occlusion proxies) are kept rather than
+         discarded, and they carry no shader.  Merging them would produce
+         nothing to draw anyway, so skip rather than fault. */
+      if (!newMatInfo.shaderItem.m_pShader)
+        continue;
       SMatGroup *mg;
       for (j=0; j<groupBrushes[nMergeId].Num(); j++)
       {
@@ -1403,8 +1410,18 @@ int CBrush::DestroyPhysicalEntityCallback(IPhysicalEntity *pent)
 
 float CBrush::GetMaxViewDist()
 {
+#if defined(__vita__) || defined(LINUX)
+	/* Keep actors on the gameplay view-distance cvar, but retire static props
+	   sooner on Vita.  Immediate fixed-function submission is CPU-bound per
+	   object, so this saves draws without making enemies disappear early. */
+	/* Avoid a second hidden 25% distance cut on top of the already reduced
+	   Vita cvar.  It made large rocks/building pieces pop in at close range. */
+	const float fVitaStaticRatio = 0.90f;
+#else
+	const float fVitaStaticRatio = 1.0f;
+#endif
   return max(GetCVars()->e_obj_min_view_dist, 
-		m_fWSRadius*GetCVars()->e_obj_view_dist_ratio*GetViewDistRatioNormilized());
+		m_fWSRadius*GetCVars()->e_obj_view_dist_ratio*GetViewDistRatioNormilized()*fVitaStaticRatio);
 }
 
 void CBrush::Serialize(bool bSave, ICryPak * pPak, FILE * f)

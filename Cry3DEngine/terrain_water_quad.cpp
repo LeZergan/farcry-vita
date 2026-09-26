@@ -28,6 +28,42 @@ enum {
 	SHP_BUMP_AMMOUNT_Y
 };
 
+#if defined(__vita__) || defined(LINUX)
+namespace
+{
+	/* Vita has no water vertex shader.  Keep the authored TerrainWater
+	   WaveAmplitude (0.1) on the CPU, but use a small periodic lookup table so
+	   the ocean does not trade its missing shader for thousands of transcendentals
+	   on the main core every frame. */
+	const int WATER_SIN_BITS = 10;
+	const int WATER_SIN_SIZE = 1 << WATER_SIN_BITS;
+
+	float WaterFastSin(float phase)
+	{
+		static float table[WATER_SIN_SIZE];
+		static bool initialized = false;
+		if(!initialized)
+		{
+			for(int i=0; i<WATER_SIN_SIZE; ++i)
+				table[i] = cry_sinf((float)i * (gf_PI*2.0f/(float)WATER_SIN_SIZE));
+			initialized = true;
+		}
+
+		const int index = (int)(phase * ((float)WATER_SIN_SIZE/(gf_PI*2.0f)));
+		return table[((unsigned int)index) & (WATER_SIN_SIZE-1)];
+	}
+
+	float WaterWaveHeight(float x, float y, float time)
+	{
+		/* This is a coarse radial mesh, so desktop-sized displacement creates
+		   visible angular ridges.  Keep only a subtle eight-centimetre swell; the
+		   animated texture supplies the fine motion. */
+		return 0.05f * WaterFastSin(x*0.085f + y*0.055f + time*0.70f) +
+		       0.03f * WaterFastSin(x*-0.045f + y*0.095f + time*1.10f);
+	}
+}
+#endif
+
 CWaterOcean::CWaterOcean(IShader * pTerrainWaterShader, int nBottomTexId, IShader * pSunRoadShader, float fWaterTranspRatio, float fWaterReflectRatio, float fWaterBumpAmountX, float fWaterBumpAmountY, float fWaterBorderTranspRatio)
 { 
   memset(m_pLeafBufferWaters,0,sizeof(m_pLeafBufferWaters));
@@ -453,7 +489,7 @@ void CWaterOcean::Render(const int nRecursionLevel)
   // Calculate water geometry and update vertex buffers
   if(bWaterVisible)
   {
-    struct_VERTEX_FORMAT_P3F_COL4UB tmp;
+    WaterOceanVertex tmp;
 
     bool bOnlyTransparency = true;
 
@@ -484,8 +520,39 @@ void CWaterOcean::Render(const int nRecursionLevel)
     }
 
 	const float fStep = 1.f/(1.f+GetCVars()->e_water_ocean_tesselation);
+#if defined(__vita__) || defined(LINUX)
+	const float fWaterTime = GetTimer()->GetCurrTime();
+	float fWaveMin = 1000.0f;
+	float fWaveMax = -1000.0f;
+#endif
 
-	float fFresnel = 0.003f/(vCamPos.z - fWaterLevel);
+	float fHeightFromWater = vCamPos.z - fWaterLevel;
+	if(fabs(fHeightFromWater) < 0.01f)
+		fHeightFromWater = fHeightFromWater < 0.0f ? -0.01f : 0.01f;
+	float fFresnel = 0.003f/fHeightFromWater;
+
+	/* The same angular samples are shared by every radial ring.  The original
+	   loop recalculated both sin and cos for every vertex pair; at tessellation
+	   level 2 that was over forty thousand trig calls per ocean update. */
+	/* e_water_ocean_tesselation is a plain cvar with no upper clamp, and the
+	   step goes to zero at 3 and negative above it -- which never terminates the
+	   loop below and, now that the samples are hoisted into a fixed array, walks
+	   off the stack while doing it.  One degree is the finest step that means
+	   anything here, so floor it there and size the tables for that worst case. */
+	const int nMaxAngleSamples = 361;
+	int nRotStep = 15-GetCVars()->e_water_ocean_tesselation*5;
+	if(nRotStep < 1)
+		nRotStep = 1;
+	float waterSin[nMaxAngleSamples];
+	float waterCos[nMaxAngleSamples];
+	int nAngleCount = 0;
+	for(int angle=0; angle<=360 && nAngleCount<nMaxAngleSamples; angle+=nRotStep)
+	{
+		const float rad = angle * (gf_PI/180.0f);
+		waterSin[nAngleCount] = cry_sinf(rad);
+		waterCos[nAngleCount] = cry_cosf(rad);
+		++nAngleCount;
+	}
 
 	for(float r1=0, r2=fStep; r2<=nChunksNum; r1+=fStep, r2+=fStep)
 	{
@@ -497,16 +564,34 @@ void CWaterOcean::Render(const int nRecursionLevel)
     float fTranspPlus1 = max(0, r1/nChunksNum-0.5f)*2;
     float fTranspPlus2 = max(0, r2/nChunksNum-0.5f)*2;
 
-		int nRotStep = 15-GetCVars()->e_water_ocean_tesselation*5;
-		for(int i=0; i<=360; i+=nRotStep)
+		for(int i=0; i<nAngleCount; ++i)
 		{
-			float rad = (i) * (gf_PI/180);
       float fAlpha;
 
 			// vert 1
-			tmp.xyz.x = cry_sinf(rad)*(r2)*fScale2 + vCamPos.x;
-			tmp.xyz.y = cry_cosf(rad)*(r2)*fScale2 + vCamPos.y;
-			tmp.xyz.z = fWaterLevel;//max(0,fWaterLevel-r2*0.125f);
+			tmp.xyz.x = waterSin[i]*(r2)*fScale2 + vCamPos.x;
+			tmp.xyz.y = waterCos[i]*(r2)*fScale2 + vCamPos.y;
+#if defined(__vita__) || defined(LINUX)
+			const float fWave2 = WaterWaveHeight(tmp.xyz.x, tmp.xyz.y, fWaterTime);
+			tmp.xyz.z = fWaterLevel + fWave2;
+			/* Retail LowSpecWaterOutdoor uses 0.225 object-linear texgen and a
+			   0.1 time shift.  Scroll the second axis slowly as well because the
+			   compact renderer has only one of the original multipass layers. */
+			tmp.st[0] = tmp.xyz.x*0.225f + fWaterTime*0.10f;
+			tmp.st[1] = tmp.xyz.y*0.225f - fWaterTime*0.06f;
+			/* The desktop water shader derives moving highlights from its displaced
+			   normal.  vitaGL has no such shader, so encode a cheap crest/trough
+			   gradient in the existing vertex colour.  Geometry was already waving
+			   on device; without this contrast it still read as a flat blue sheet. */
+			const float fCrest2 = CLAMP((fWave2 + 0.28f) / 0.56f, 0.0f, 1.0f);
+			tmp.color.bcolor[0] = (uint8)(150.0f + 65.0f*fCrest2);
+			tmp.color.bcolor[1] = (uint8)(90.0f + 75.0f*fCrest2);
+			tmp.color.bcolor[2] = (uint8)(30.0f + 45.0f*fCrest2);
+			fWaveMin = min(fWaveMin, fWave2);
+			fWaveMax = max(fWaveMax, fWave2);
+#else
+			tmp.xyz.z = fWaterLevel;
+#endif
 
 			fAlpha = fWaterLevel - p3DEngine->GetTerrainElevation(tmp.xyz.x,tmp.xyz.y);
 			fAlpha = CLAMP(fAlpha*m_fWaterBorderTranspRatio, 0.0f, 1.0f);
@@ -520,9 +605,22 @@ void CWaterOcean::Render(const int nRecursionLevel)
 			Verts_DWQ.Add(tmp);
 
 			// vert 2
-			tmp.xyz.x = cry_sinf(rad)*(r1)*fScale1 + vCamPos.x;
-			tmp.xyz.y = cry_cosf(rad)*(r1)*fScale1 + vCamPos.y;
-			tmp.xyz.z = fWaterLevel;//max(0,fWaterLevel-r1*0.125f);
+			tmp.xyz.x = waterSin[i]*(r1)*fScale1 + vCamPos.x;
+			tmp.xyz.y = waterCos[i]*(r1)*fScale1 + vCamPos.y;
+#if defined(__vita__) || defined(LINUX)
+			const float fWave1 = WaterWaveHeight(tmp.xyz.x, tmp.xyz.y, fWaterTime);
+			tmp.xyz.z = fWaterLevel + fWave1;
+			tmp.st[0] = tmp.xyz.x*0.225f + fWaterTime*0.10f;
+			tmp.st[1] = tmp.xyz.y*0.225f - fWaterTime*0.06f;
+			const float fCrest1 = CLAMP((fWave1 + 0.28f) / 0.56f, 0.0f, 1.0f);
+			tmp.color.bcolor[0] = (uint8)(150.0f + 65.0f*fCrest1);
+			tmp.color.bcolor[1] = (uint8)(90.0f + 75.0f*fCrest1);
+			tmp.color.bcolor[2] = (uint8)(30.0f + 45.0f*fCrest1);
+			fWaveMin = min(fWaveMin, fWave1);
+			fWaveMax = max(fWaveMax, fWave1);
+#else
+			tmp.xyz.z = fWaterLevel;
+#endif
 
 			fAlpha = fWaterLevel - p3DEngine->GetTerrainElevation(tmp.xyz.x,tmp.xyz.y);
 			fAlpha = CLAMP(fAlpha*m_fWaterBorderTranspRatio, 0.0f, 1.0f);
@@ -542,8 +640,23 @@ void CWaterOcean::Render(const int nRecursionLevel)
 
 	lstFirstIdxId.Add(Indices_DWQ.Count());
 
-  if(	m_pLeafBufferWaters[nRecursionLevel][nBufID] && 
-			m_pLeafBufferWaters[nRecursionLevel][nBufID]->m_pSecVertBuffer->m_vertexformat == VERTEX_FORMAT_P3F_COL4UB &&
+#if (defined(__vita__) || defined(LINUX)) && defined(VITA_PERF_TELEMETRY)
+	if(nRecursionLevel == 0 && (GetFrameID() % 300) == 0 && GetLog())
+		GetLog()->LogToFile("\001[VITA][WATERCPU] frame=%d time=%.2f verts=%d wave=%.3f..%.3f uv0=%.3f,%.3f",
+			GetFrameID(), fWaterTime, Verts_DWQ.Count(), fWaveMin, fWaveMax,
+			Verts_DWQ.Count() ? Verts_DWQ[0].st[0] : 0.0f,
+			Verts_DWQ.Count() ? Verts_DWQ[0].st[1] : 0.0f);
+#endif
+
+  const int nWaterVertexFormat =
+#if defined(__vita__) || defined(LINUX)
+		VERTEX_FORMAT_P3F_COL4UB_TEX2F;
+#else
+		VERTEX_FORMAT_P3F_COL4UB;
+#endif
+
+  if(	m_pLeafBufferWaters[nRecursionLevel][nBufID] &&
+			m_pLeafBufferWaters[nRecursionLevel][nBufID]->m_pSecVertBuffer->m_vertexformat == nWaterVertexFormat &&
 			m_pLeafBufferWaters[nRecursionLevel][nBufID]->m_nPrimetiveType == R_PRIMV_MULTI_STRIPS &&
 			m_pLeafBufferWaters[nRecursionLevel][nBufID]->m_SecVertCount >= Verts_DWQ.Count() &&
 			m_pLeafBufferWaters[nRecursionLevel][nBufID]->m_pMats->Count() == lstFirstIdxId.Count()-1)
@@ -560,7 +673,7 @@ void CWaterOcean::Render(const int nRecursionLevel)
       GetRenderer()->DeleteLeafBuffer(m_pLeafBufferWaters[nRecursionLevel][nBufID]);
 
 		m_pLeafBufferWaters[nRecursionLevel][nBufID] = GetRenderer()->CreateLeafBufferInitialized(
-			Verts_DWQ.GetElements(), Verts_DWQ.Count(), VERTEX_FORMAT_P3F_COL4UB, 
+			Verts_DWQ.GetElements(), Verts_DWQ.Count(), nWaterVertexFormat,
 			Indices_DWQ.GetElements(), Indices_DWQ.Count(), R_PRIMV_MULTI_STRIPS,
 			"OutdoorWaterCircle", eBT_Dynamic,nChunksNum, 0x1000);
 

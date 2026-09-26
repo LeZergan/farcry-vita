@@ -472,6 +472,15 @@ struct SVertexStream
   unsigned int m_nGLIBO;
   int          m_nGLIBOItems;
   bool         m_bGLDirty;
+  /* Static Vita index streams can use vitaGL's legacy mapped draw path.  The
+     pointer is GPU-visible RAM owned by vitaGL and is deliberately separate
+     from the ordinary GL buffer object: multi-texture/lightmap draws still use
+     that proven path, while single-texture world geometry can bypass its
+     per-draw vertex-array validation. */
+  void        *m_pVitaMappedIndices;
+  int          m_nVitaMappedIndexItems;
+  unsigned int m_nVitaMappedIndexBytes;
+  bool         m_bVitaMappedIndexDirty;
 #endif
   SVertexStream()
   {
@@ -483,6 +492,10 @@ struct SVertexStream
     m_nGLIBO = 0;
     m_nGLIBOItems = 0;
     m_bGLDirty = true;
+    m_pVitaMappedIndices = NULL;
+    m_nVitaMappedIndexItems = 0;
+    m_nVitaMappedIndexBytes = 0;
+    m_bVitaMappedIndexDirty = true;
 #endif
   }
 
@@ -514,6 +527,11 @@ public:
     m_nGLVBO = 0;
     m_nGLVBOVerts = 0;
     m_bGLDirty = true;
+    m_nVitaUnlitColours = -1;
+    m_pVitaMappedVertices = NULL;
+    m_nVitaMappedVerts = 0;
+    m_nVitaMappedVertexBytes = 0;
+    m_bVitaMappedVertexDirty = true;
 #endif
   }
   
@@ -534,6 +552,11 @@ public:
     m_nGLVBO = 0;
     m_nGLVBOVerts = 0;
     m_bGLDirty = true;
+    m_nVitaUnlitColours = -1;
+    m_pVitaMappedVertices = NULL;
+    m_nVitaMappedVerts = 0;
+    m_nVitaMappedVertexBytes = 0;
+    m_bVitaMappedVertexDirty = true;
 #endif
   }
   void *GetStream(int nStream, int *nOffs);
@@ -552,6 +575,11 @@ public:
   unsigned int m_nGLVBO;
   int          m_nGLVBOVerts;
   bool         m_bGLDirty;
+  signed char  m_nVitaUnlitColours; // -1 unknown, 0 lit, 1 missing lighting, 2 static ambient repaired
+  void        *m_pVitaMappedVertices;
+  int          m_nVitaMappedVerts;
+  unsigned int m_nVitaMappedVertexBytes;
+  bool         m_bVitaMappedVertexDirty;
 #endif
 //## MM unused?	void *pPS2Buffer;
 

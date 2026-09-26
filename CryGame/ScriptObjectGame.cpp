@@ -2086,17 +2086,19 @@ int CScriptObjectGame::DrawRadar(IFunctionHandler *pH)
 {
   CHECK_PARAMETERS(14);
 
-  ASSERT(m_pEntitySystem);  
-  float x, y, w, h, fRange;
-  char *pRadarObjective;
+  ASSERT(m_pEntitySystem);
+  if (!m_pGame || !m_pEntitySystem || !m_pScriptSystem)
+    return pH->EndFunction();
+
+  float x=0.0f, y=0.0f, w=0.0f, h=0.0f, fRange=0.0f;
+  const char *pRadarObjective="NoObjective";
   int nCookie=0;
 
   _SmartScriptObject pEntities(m_pScriptSystem, true);
-  pH->GetParam(1, x);
-  pH->GetParam(2, y);
-  pH->GetParam(3, w);
-  pH->GetParam(4, h);
-  pH->GetParam(5, fRange);
+  if (!pH->GetParam(1, x) || !pH->GetParam(2, y) ||
+      !pH->GetParam(3, w) || !pH->GetParam(4, h) ||
+      !pH->GetParam(5, fRange) || w<=0.0f || h<=0.0f || fRange<=0.0f)
+    return pH->EndFunction();
 
   // get radar textures id
   INT_PTR pRadarTextures[NUM_RADAR_TEXTURES];
@@ -2108,8 +2110,10 @@ int CScriptObjectGame::DrawRadar(IFunctionHandler *pH)
 			return pH->EndFunction();		
 	} //k
 
-  pH->GetParam(6+NUM_RADAR_TEXTURES, *pEntities); 
-  pH->GetParam(6+NUM_RADAR_TEXTURES+1, pRadarObjective); 
+  if (!pH->GetParam(6+NUM_RADAR_TEXTURES, *pEntities) ||
+      !pH->GetParam(6+NUM_RADAR_TEXTURES+1, pRadarObjective) ||
+      !pRadarObjective)
+    return pH->EndFunction();
   
   m_pGame->DrawRadar(x, y, w, h, fRange, pRadarTextures, &pEntities, pRadarObjective);
   return pH->EndFunction();

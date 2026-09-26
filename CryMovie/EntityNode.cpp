@@ -126,6 +126,7 @@ CAnimEntityNode::CAnimEntityNode( IMovieSystem *sys )
 	m_lastCharacterKey[0] = -1;
 	m_lastCharacterKey[1] = -1;
 	m_lastCharacterKey[2] = -1;
+	m_time = 0.0f;
 
 	for (int i=0;i<ENTITY_SOUNDTRACKS;i++)
 	{
@@ -333,16 +334,45 @@ void CAnimEntityNode::Animate( SAnimContext &ec )
 				CEventTrack *entityTrack = (CEventTrack*)pTrack;
 				IEventKey key;
 				int entityKey = entityTrack->GetActiveKey(ec.time,&key);
-				// If key is different or if time is standing exactly on key time.
-				//if ((entityKey != m_lastEntityKey || key.time == ec.time) && (!ec.bSingleFrame))
-				if (entityKey != m_lastEntityKey || key.time == ec.time)
+				if (entityKey < 0)
 				{
+					m_lastEntityKey = -1;
+				}
+				else if (m_lastEntityKey < 0)
+				{
+					if (!ec.bSingleFrame || key.time == ec.time)
+						ApplyEventKey( entityTrack,entityKey,key );
 					m_lastEntityKey = entityKey;
-					if (entityKey >= 0)
+				}
+				else if (entityKey > m_lastEntityKey)
+				{
+					for (int nKey = m_lastEntityKey + 1; nKey <= entityKey; ++nKey)
 					{
-						if (!ec.bSingleFrame || key.time == ec.time) // If Single frame update key time must match current time.
-							ApplyEventKey( entityTrack,entityKey,key );
+						entityTrack->GetKey(nKey, &key);
+						if (!ec.bSingleFrame || key.time == ec.time)
+							ApplyEventKey(entityTrack, nKey, key);
 					}
+					m_lastEntityKey = entityKey;
+				}
+				else if (entityKey < m_lastEntityKey)
+				{
+					for (int nKey = m_lastEntityKey + 1; nKey < entityTrack->GetNumKeys(); ++nKey)
+					{
+						entityTrack->GetKey(nKey, &key);
+						if (!ec.bSingleFrame || key.time == ec.time)
+							ApplyEventKey(entityTrack, nKey, key);
+					}
+					for (int nKey = 0; nKey <= entityKey; ++nKey)
+					{
+						entityTrack->GetKey(nKey, &key);
+						if (!ec.bSingleFrame || key.time == ec.time)
+							ApplyEventKey(entityTrack, nKey, key);
+					}
+					m_lastEntityKey = entityKey;
+				}
+				else if (key.time == ec.time && !ec.bSingleFrame)
+				{
+					ApplyEventKey(entityTrack, entityKey, key);
 				}
 			}
 			break;
@@ -367,7 +397,17 @@ void CAnimEntityNode::Animate( SAnimContext &ec )
 				CSoundTrack *pSoundTrack = (CSoundTrack*)pTrack;
 				ISoundKey key;
 				int nSoundKey = pSoundTrack->GetActiveKey(ec.time, &key);
-				if (nSoundKey!=m_SoundInfo[nSoundIndex].nLastKey || key.time==ec.time || nSoundKey==-1)
+				/* GetActiveKey does not promise to populate key when it returns -1.
+				   Release the old sound without inspecting that invalid payload. */
+				if (nSoundKey==-1)
+				{
+					if (m_SoundInfo[nSoundIndex].nLastKey!=-1)
+					{
+						m_SoundInfo[nSoundIndex].nLastKey=-1;
+						ApplySoundKey( pSoundTrack,nSoundKey,nSoundIndex,key,ec );
+					}
+				}
+				else if (nSoundKey!=m_SoundInfo[nSoundIndex].nLastKey || key.time==ec.time)
 				{
 					if (!ec.bSingleFrame || key.time == ec.time) // If Single frame update key time must match current time.
 					{
@@ -517,6 +557,7 @@ void CAnimEntityNode::Reset()
 	m_lastCharacterKey[0] = -1;
 	m_lastCharacterKey[1] = -1;
 	m_lastCharacterKey[2] = -1;
+	m_time = 0.0f;
 	ReleaseSounds();
 	ReleaseAllAnims();
 	m_entity = NULL;
@@ -759,6 +800,8 @@ void CAnimEntityNode::ApplyEventKey( CEventTrack *track,int keyIndex,IEventKey &
 //////////////////////////////////////////////////////////////////////////
 void CAnimEntityNode::ApplySoundKey( IAnimTrack *pTrack,int nCurrKey,int nLayer, ISoundKey &key, SAnimContext &ec )
 {
+	if (!pTrack || nLayer < 0 || nLayer >= ENTITY_SOUNDTRACKS)
+		return;
 	if (m_SoundInfo[nLayer].nLastKey==-1)
 	{
 		if (m_SoundInfo[nLayer].pSound)
@@ -766,6 +809,8 @@ void CAnimEntityNode::ApplySoundKey( IAnimTrack *pTrack,int nCurrKey,int nLayer,
 		m_SoundInfo[nLayer].pSound=NULL;
 		return;
 	}
+	if (!key.pszFilename || !key.pszFilename[0])
+		return;
 	if (((strcmp(m_SoundInfo[nLayer].sLastFilename.c_str(), key.pszFilename)) || (!m_SoundInfo[nLayer].pSound)))
 	{
 		int flags = 0;
@@ -776,6 +821,12 @@ void CAnimEntityNode::ApplySoundKey( IAnimTrack *pTrack,int nCurrKey,int nLayer,
 
 		if (key.bLoop)
 			flags |= FLAG_SOUND_LOOP;
+		#if defined(__vita__)
+		/* Cinematic dialogue must follow the movie, not the physical speaker's
+		   world-space attenuation.  Camera cuts otherwise make the same voice jump
+		   far away or disappear while its authored line is still playing. */
+		flags |= FLAG_SOUND_2D|FLAG_SOUND_STEREO|FLAG_SOUND_16BITS;
+		#else
 		if (key.b3DSound)
 		{
 			// 3D sound.
@@ -785,7 +836,8 @@ void CAnimEntityNode::ApplySoundKey( IAnimTrack *pTrack,int nCurrKey,int nLayer,
 		{
 			// 2D sound.
 			flags |= FLAG_SOUND_2D|FLAG_SOUND_STEREO|FLAG_SOUND_16BITS;
-		} 
+		}
+		#endif
 		// we have a different sound now
 		if (m_SoundInfo[nLayer].pSound)
 			m_SoundInfo[nLayer].pSound->Stop();
@@ -812,6 +864,9 @@ void CAnimEntityNode::ApplySoundKey( IAnimTrack *pTrack,int nCurrKey,int nLayer,
 	
 	m_SoundInfo[nLayer].pSound->SetSoundPriority( MOVIE_SOUND_PRIORITY );
 	m_SoundInfo[nLayer].pSound->SetVolume(key.nVolume);
+	#if defined(__vita__)
+	m_SoundInfo[nLayer].pSound->SetPan(128);
+	#else
 	if (key.b3DSound)
 	{
 		// 3D sound.
@@ -822,7 +877,8 @@ void CAnimEntityNode::ApplySoundKey( IAnimTrack *pTrack,int nCurrKey,int nLayer,
 	{
 		// 2D sound.
 		m_SoundInfo[nLayer].pSound->SetPan(key.nPan);
-	} 
+	}
+	#endif
 
 	int nOffset=(int)((ec.time-key.time)*1000.0f);
 	if (nOffset < m_SoundInfo[nLayer].nLength)
@@ -882,6 +938,11 @@ void CAnimEntityNode::AnimateCharacterTrack( class CCharacterTrack* track,SAnimC
 
 	ICharacterKey key;
 	int currKey = track->GetActiveKey(ec.time,&key);
+	if (currKey < 0)
+	{
+		m_lastCharacterKey[layer] = -1;
+		return;
+	}
 	// If key is different or if time is standing exactly on key time.
 	if (currKey != m_lastCharacterKey[layer] || key.time == ec.time || ec.time < m_time)
 	{

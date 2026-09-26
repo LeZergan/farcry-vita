@@ -4,7 +4,286 @@
 #include "CrySkinFull.h"
 #include "platform.h"
 
+#if defined(__vita__) || defined(LINUX)
+#include <psp2/kernel/cpu.h>
+#include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/threadmgr.h>
+#endif
+
 #define FOR_TEST 0
+
+#if defined(__vita__) || defined(LINUX)
+namespace
+{
+	const unsigned VITA_SKIN_RIGID_BIT = 0x8000u;
+	const unsigned VITA_SKIN_BONE_MASK = 0x7fffu;
+	const unsigned VITA_SKIN_MIN_DESTS = 256;
+	const unsigned VITA_SKIN_MIN_LINKS = 512;
+
+	struct VitaSkinJob
+	{
+		const Matrix44 *pBones;
+		const CrySkinVertexAligned *pVertices;
+		const VitaSkinGatherLink *pLinks;
+		const unsigned *pOffsets;
+		void *pDest;
+		unsigned nDestStride;
+		unsigned nBegin;
+		unsigned nEnd;
+		bool bTranslate;
+	};
+
+	void RunVitaSkinRange(const VitaSkinJob &job)
+	{
+		for(unsigned nDest=job.nBegin; nDest<job.nEnd; ++nDest)
+		{
+			Vec3d result(0.0f, 0.0f, 0.0f);
+			const unsigned nLinkEnd = job.pOffsets[nDest+1];
+			for(unsigned nLink=job.pOffsets[nDest]; nLink<nLinkEnd; ++nLink)
+			{
+				const VitaSkinGatherLink &link = job.pLinks[nLink];
+				const CrySkinVertexAligned &vertex = job.pVertices[link.nVertex];
+				const Matrix44 &bone = job.pBones[link.nBoneAndRigid & VITA_SKIN_BONE_MASK];
+				const float weight = (link.nBoneAndRigid & VITA_SKIN_RIGID_BIT) ? 1.0f : vertex.fWeight;
+				const float tx = job.bTranslate ? bone[3][0] : 0.0f;
+				const float ty = job.bTranslate ? bone[3][1] : 0.0f;
+				const float tz = job.bTranslate ? bone[3][2] : 0.0f;
+				result.x += ((bone[0][0]*vertex.pt.x) + (bone[1][0]*vertex.pt.y) + (bone[2][0]*vertex.pt.z) + tx) * weight;
+				result.y += ((bone[0][1]*vertex.pt.x) + (bone[1][1]*vertex.pt.y) + (bone[2][1]*vertex.pt.z) + ty) * weight;
+				result.z += ((bone[0][2]*vertex.pt.x) + (bone[1][2]*vertex.pt.y) + (bone[2][2]*vertex.pt.z) + tz) * weight;
+			}
+			*(Vec3d *)((char *)job.pDest + nDest*job.nDestStride) = result;
+		}
+	}
+
+	class VitaSkinWorkers
+	{
+	public:
+		VitaSkinWorkers(): m_done(-1), m_ready(false), m_attempted(false), m_running(true)
+		{
+			for(int i=0; i<2; ++i)
+			{
+				m_thread[i] = -1;
+				m_start[i] = -1;
+				m_index[i] = i;
+			}
+		}
+
+		~VitaSkinWorkers()
+		{
+			m_running = false;
+			for(int i=0; i<2; ++i)
+				if(m_start[i] >= 0)
+					sceKernelSignalSema(m_start[i], 1);
+			for(int i=0; i<2; ++i)
+			{
+				if(m_thread[i] >= 0)
+				{
+					sceKernelWaitThreadEnd(m_thread[i], 0, 0);
+					sceKernelDeleteThread(m_thread[i]);
+				}
+				if(m_start[i] >= 0)
+					sceKernelDeleteSema(m_start[i]);
+			}
+			if(m_done >= 0)
+				sceKernelDeleteSema(m_done);
+		}
+
+		bool initialize()
+		{
+			if(m_ready)
+				return true;
+			/* Do not leak another partial pool every frame if a kernel rejects a
+			   semaphore, affinity, or thread request.  Serial skinning remains the
+			   safe fallback for the rest of that run. */
+			if(m_attempted)
+				return false;
+			m_attempted = true;
+
+			m_done = sceKernelCreateSema("fc_skin_done", 0, 0, 2, 0);
+			if(m_done < 0)
+			{
+				if(g_GetLog())
+					g_GetLog()->LogToFile("\001[VITA][SKINMT] disabled: done semaphore failed 0x%08x", (unsigned)m_done);
+				return false;
+			}
+
+			/* CapUnlock removes the game-process check on the normally reserved
+			   0x80000/core-3 mask.  Main owns core 0 and the audio mixer owns core
+			   2, so skinning gets the otherwise idle cores 1 and 3. */
+			const int cpuMasks[2] = { SCE_KERNEL_CPU_MASK_USER_1, SCE_KERNEL_CPU_MASK_SYSTEM };
+			for(int i=0; i<2; ++i)
+			{
+				char semName[32], threadName[32];
+				sprintf(semName, "fc_skin_start_%d", i);
+				sprintf(threadName, "fc_skin_cpu_%d", i ? 3 : 1);
+				m_start[i] = sceKernelCreateSema(semName, 0, 0, 1, 0);
+				if(m_start[i] < 0)
+				{
+					if(g_GetLog())
+						g_GetLog()->LogToFile("\001[VITA][SKINMT] disabled: start semaphore %d failed 0x%08x", i, (unsigned)m_start[i]);
+					return false;
+				}
+				m_thread[i] = sceKernelCreateThread(threadName, WorkerEntry,
+					0x10000100, 0x10000, 0, cpuMasks[i], 0);
+				if(m_thread[i] < 0)
+				{
+					if(g_GetLog())
+						g_GetLog()->LogToFile("\001[VITA][SKINMT] disabled: worker %d create failed 0x%08x", i, (unsigned)m_thread[i]);
+					return false;
+				}
+				const int startResult = sceKernelStartThread(m_thread[i], sizeof(int), &m_index[i]);
+				if(startResult < 0)
+				{
+					if(g_GetLog())
+						g_GetLog()->LogToFile("\001[VITA][SKINMT] disabled: worker %d start failed 0x%08x", i, (unsigned)startResult);
+					sceKernelDeleteThread(m_thread[i]);
+					m_thread[i] = -1;
+					return false;
+				}
+			}
+
+			m_ready = true;
+			if(g_GetLog())
+				g_GetLog()->LogToFile("\001[VITA][SKINMT] gather workers active on CPU 1 and unlocked CPU 3");
+			return true;
+		}
+
+		void run(VitaSkinJob jobs[3])
+		{
+#if defined(VITA_PERF_TELEMETRY)
+			const SceUInt64 nStartUs = sceKernelGetProcessTimeWide();
+#endif
+			m_jobs[0] = jobs[0];
+			m_jobs[1] = jobs[1];
+			__sync_synchronize();
+			sceKernelSignalSema(m_start[0], 1);
+			sceKernelSignalSema(m_start[1], 1);
+			RunVitaSkinRange(jobs[2]);
+			sceKernelWaitSema(m_done, 2, 0);
+
+			/* Prove that the workers are receiving substantial jobs, not merely
+			   that their threads were created.  Report an amortised wall time so
+			   semaphore overhead and poor thresholds are visible on hardware. */
+#if defined(VITA_PERF_TELEMETRY)
+			static unsigned s_nJobs = 0;
+			static unsigned s_nBatchJobs = 0;
+			static SceUInt64 s_nTotalUs = 0;
+			static SceUInt64 s_nTotalDests = 0;
+			static SceUInt64 s_nTotalLinks = 0;
+			s_nTotalUs += sceKernelGetProcessTimeWide() - nStartUs;
+			s_nTotalDests += jobs[2].nEnd;
+			s_nTotalLinks += jobs[2].pOffsets[jobs[2].nEnd];
+			++s_nJobs;
+			++s_nBatchJobs;
+			if ((s_nJobs == 1 || s_nBatchJobs >= 120) && g_GetLog())
+			{
+				g_GetLog()->LogToFile("\001[VITA][SKINMT] jobs=%u total=%u avgWallUs=%u avgDests=%u avgLinks=%u cores=1,3",
+					s_nBatchJobs, s_nJobs, (unsigned)(s_nTotalUs / s_nBatchJobs),
+					(unsigned)(s_nTotalDests / s_nBatchJobs),
+					(unsigned)(s_nTotalLinks / s_nBatchJobs));
+				s_nTotalUs = s_nTotalDests = s_nTotalLinks = 0;
+				s_nBatchJobs = 0;
+			}
+#endif
+		}
+
+	private:
+		static int WorkerEntry(SceSize args, void *argp)
+		{
+			int index = 0;
+			if(argp && args >= sizeof(int))
+				index = *(int *)argp;
+			VitaSkinWorkers &workers = Instance();
+			while(workers.m_running)
+			{
+				sceKernelWaitSema(workers.m_start[index], 1, 0);
+				if(!workers.m_running)
+					break;
+				__sync_synchronize();
+				RunVitaSkinRange(workers.m_jobs[index]);
+				sceKernelSignalSema(workers.m_done, 1);
+			}
+			return 0;
+		}
+
+	public:
+		static VitaSkinWorkers &Instance()
+		{
+			static VitaSkinWorkers workers;
+			return workers;
+		}
+
+	private:
+		SceUID m_thread[2];
+		SceUID m_start[2];
+		SceUID m_done;
+		int m_index[2];
+		VitaSkinJob m_jobs[2];
+		bool m_ready;
+		bool m_attempted;
+		volatile bool m_running;
+	};
+}
+
+void CrySkinFull::buildVitaGather()
+{
+	if(m_vitaGatherOffsets.size() == m_numDests+1 &&
+	   m_vitaGatherLinks.size() == m_arrVertices.size())
+		return;
+
+	std::vector<unsigned> counts(m_numDests, 0);
+	u32 s = 0, t = 0;
+	for(unsigned nBone=m_numSkipBones; nBone<m_numBones; ++nBone)
+	{
+		const u32 rigid = m_arrAux[t++];
+		for(u32 i=0; i<rigid; ++i, ++s)
+			++counts[m_arrVertices[s].nDest];
+		const u32 smoothFirst = m_arrAux[t++];
+		for(u32 i=0; i<smoothFirst; ++i, ++s)
+			++counts[m_arrAux[t++]];
+		const u32 smoothMore = m_arrAux[t++];
+		for(u32 i=0; i<smoothMore; ++i, ++s)
+			++counts[m_arrAux[t++]];
+	}
+
+	m_vitaGatherOffsets.resize(m_numDests+1);
+	m_vitaGatherOffsets[0] = 0;
+	for(unsigned i=0; i<m_numDests; ++i)
+		m_vitaGatherOffsets[i+1] = m_vitaGatherOffsets[i] + counts[i];
+	m_vitaGatherLinks.resize(m_arrVertices.size());
+	std::vector<unsigned> cursor(m_vitaGatherOffsets.begin(), m_vitaGatherOffsets.end()-1);
+
+	s = 0; t = 0;
+	for(unsigned nBone=m_numSkipBones; nBone<m_numBones; ++nBone)
+	{
+		const u32 rigid = m_arrAux[t++];
+		for(u32 i=0; i<rigid; ++i, ++s)
+		{
+			const unsigned nDest = m_arrVertices[s].nDest;
+			VitaSkinGatherLink &link = m_vitaGatherLinks[cursor[nDest]++];
+			link.nVertex = s;
+			link.nBoneAndRigid = (u16)(nBone | VITA_SKIN_RIGID_BIT);
+		}
+		const u32 smoothFirst = m_arrAux[t++];
+		for(u32 i=0; i<smoothFirst; ++i, ++s)
+		{
+			const unsigned nDest = m_arrAux[t++];
+			VitaSkinGatherLink &link = m_vitaGatherLinks[cursor[nDest]++];
+			link.nVertex = s;
+			link.nBoneAndRigid = (u16)nBone;
+		}
+		const u32 smoothMore = m_arrAux[t++];
+		for(u32 i=0; i<smoothMore; ++i, ++s)
+		{
+			const unsigned nDest = m_arrAux[t++];
+			VitaSkinGatherLink &link = m_vitaGatherLinks[cursor[nDest]++];
+			link.nVertex = s;
+			link.nBoneAndRigid = (u16)nBone;
+		}
+	}
+}
+#endif
 
 // takes each offset and includes it into the bbox of corresponding bone
 /*void CrySkinFull::computeBoneBBoxes(CryBBoxA16* pBBoxes)
@@ -40,6 +319,40 @@ void CrySkinFull::skin (const Matrix44* pBones, Vec3d* pDest)
 {
 #ifdef DEFINE_PROFILER_FUNCTION
 	DEFINE_PROFILER_FUNCTION();
+#endif
+
+#if defined(__vita__) || defined(LINUX)
+	/* Bone-major skinning cannot be sliced safely: smooth links accumulate into
+	   shared destinations and both packed streams have serial cursors.  The
+	   cached gather map reverses that relation, so each worker exclusively owns
+	   a destination range and produces byte-for-byte compatible weighted sums. */
+	if(m_numDests >= VITA_SKIN_MIN_DESTS && m_arrVertices.size() >= VITA_SKIN_MIN_LINKS)
+	{
+		buildVitaGather();
+		VitaSkinWorkers &workers = VitaSkinWorkers::Instance();
+		if(workers.initialize())
+		{
+			const unsigned split1 = m_numDests/3;
+			const unsigned split2 = (m_numDests*2)/3;
+			VitaSkinJob jobs[3];
+			const unsigned begins[3] = { 0, split1, split2 };
+			const unsigned ends[3] = { split1, split2, m_numDests };
+			for(int i=0; i<3; ++i)
+			{
+				jobs[i].pBones = pBones;
+				jobs[i].pVertices = &m_arrVertices[0];
+				jobs[i].pLinks = &m_vitaGatherLinks[0];
+				jobs[i].pOffsets = &m_vitaGatherOffsets[0];
+				jobs[i].pDest = pDest;
+				jobs[i].nDestStride = sizeof(Vec3d);
+				jobs[i].nBegin = begins[i];
+				jobs[i].nEnd = ends[i];
+				jobs[i].bTranslate = true;
+			}
+			workers.run(jobs);
+			return;
+		}
+	}
 #endif
 
 	//PROFILE_FRAME_SELF(PureSkin);
@@ -124,6 +437,37 @@ void CrySkinFull::skin (const Matrix44* pBones, Vec3d* pDest)
 // does the skinning out of the given array of global matrices
 void CrySkinFull::skinAsVec3d16 (const Matrix44* pBones, Vec3dA16* pDest)
 {
+
+#if defined(__vita__) || defined(LINUX)
+	if(m_numDests >= VITA_SKIN_MIN_DESTS && m_arrVertices.size() >= VITA_SKIN_MIN_LINKS)
+	{
+		buildVitaGather();
+		VitaSkinWorkers &workers = VitaSkinWorkers::Instance();
+		if(workers.initialize())
+		{
+			const unsigned split1 = m_numDests/3;
+			const unsigned split2 = (m_numDests*2)/3;
+			VitaSkinJob jobs[3];
+			const unsigned begins[3] = { 0, split1, split2 };
+			const unsigned ends[3] = { split1, split2, m_numDests };
+			for(int i=0; i<3; ++i)
+			{
+				jobs[i].pBones = pBones;
+				jobs[i].pVertices = &m_arrVertices[0];
+				jobs[i].pLinks = &m_vitaGatherLinks[0];
+				jobs[i].pOffsets = &m_vitaGatherOffsets[0];
+				jobs[i].pDest = pDest;
+				jobs[i].nDestStride = sizeof(Vec3dA16);
+				jobs[i].nBegin = begins[i];
+				jobs[i].nEnd = ends[i];
+				jobs[i].bTranslate = false;
+			}
+			workers.run(jobs);
+			return;
+		}
+	}
+#endif
+
 	//PROFILE_FRAME_SELF(PureSkin);
 #if FOR_TEST
 	for (int i = 0; i < g_GetCVars()->ca_TestSkinningRepeats(); ++i)

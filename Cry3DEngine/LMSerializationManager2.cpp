@@ -648,23 +648,6 @@ RenderLMData * CLMSerializationManager2::CreateLightmap(const string& strDirPath
 	IRenderer *pIRenderer = GetSystem()->GetIRenderer();
 	int iColorLerpTex = 0, iHDRColorLerpTex = 0, iDomDirectionTex = 0, iOcclTex = 0;
 
-#if defined(__vita__)
-	/* The compact Vita renderer currently submits one base-texture pass and
-	   does not sample RenderLMData or the per-instance LM coordinate stream.
-	   Loading every 512x512 color/direction pair therefore consumed tens of
-	   MiB of CDRAM for data that could never affect a pixel.  Vita3K also
-	   aborts in its host texture path after the fifth pair.  Keep parsing the
-	   retail Dot3LM.dat and preserve its object mapping, but represent the
-	   deliberately disabled lightmap pass with an empty resource object. */
-	(void)strDirPath;
-	(void)nItem;
-	(void)iWidth;
-	(void)iHeight;
-	(void)cbLoadHDRMaps;
-	(void)cbLoadOcclMaps;
-	return new RenderLMData(pIRenderer, 0, 0, 0, 0);
-#endif
-
   int nGPU = pIRenderer->GetFeatures() & RFT_HW_MASK;
 	char szPostfix[8];
 	sprintf(szPostfix, "%d.dds", nItem);
@@ -709,6 +692,12 @@ RenderLMData * CLMSerializationManager2::CreateLightmap(const char *pszFileName,
 	// Create a DOT3 Lightmap object
 	IRenderer *pIRenderer = GetSystem()->GetIRenderer();
 	int iColorLerpTex = 0, iHDRColorLerpTex = 0, iDomDirectionTex = 0, iOcclTex = 0;
+	if (!pIRenderer || !pColorLerp4 || !pDomDirection3 || !iWidth || !iHeight)
+		return new RenderLMData(pIRenderer, 0, 0, 0, 0);
+	const size_t nPixelCount = (size_t)iWidth * (size_t)iHeight;
+	if (nPixelCount / (size_t)iWidth != (size_t)iHeight ||
+		nPixelCount > ((size_t)-1) / 4u)
+		return new RenderLMData(pIRenderer, 0, 0, 0, 0);
 
 	assert(!IsBadReadPtr(pColorLerp4, sizeof(BYTE) * 4 * iWidth * iHeight));
 #ifdef USE_DOT3_ALPHA
@@ -721,10 +710,70 @@ RenderLMData * CLMSerializationManager2::CreateLightmap(const char *pszFileName,
 	if(pHDRColorLerp)
 		assert(!IsBadReadPtr(pHDRColorLerp, sizeof(BYTE) * 4 * iWidth * iHeight));
 
+#if defined(FARCRY_VITA_FULL_GAME)
+	/* The Vita advertises the GF2 feature tier so the engine asks for one
+	   pre-combined low-spec lightmap.  The legacy path below uploads color and
+	   direction as two temporary GPU textures, asks EF_GetTextureByID for their
+	   original CPU bytes, combines them, then uploads a third texture.  Bare
+	   DownLoadToVideoMemory ids are intentionally not texture-manager objects on
+	   this backend, so that lookup is null; even if wrapped, the two uploads are
+	   wasted work and memory during every level load.  Combine the exact same
+	   authored bytes directly and upload only the texture that survives. */
+	const int nVitaGPU = pIRenderer->GetFeatures() & RFT_HW_MASK;
+	if (GetCVars()->e_light_maps_quality == 0 || nVitaGPU == RFT_HW_GF2)
+	{
+		byte *pDst = new byte[nPixelCount * 4u];
+		if (!pDst)
+			return new RenderLMData(pIRenderer, 0, 0, 0, 0);
+		for (size_t i = 0; i < nPixelCount; ++i)
+		{
+			const byte *pSr0 = pColorLerp4 + i * 4u;
+#ifdef USE_DOT3_ALPHA
+			const byte *pSr1 = pDomDirection3 + i * 4u;
+#else
+			const byte *pSr1 = pDomDirection3 + i * 3u;
+#endif
+			byte *pDs = pDst + i * 4u;
+			float NdotL = ((float)pSr1[0] - 127.5f) / 127.5f;
+			if (NdotL < 0.0f)
+				NdotL = 0.0f;
+			float lmColor[4];
+#ifdef APPLY_COLOUR_FIX
+			lmColor[0] = (float)pSr0[0] * (float)pSr1[3] / 255.0f / 255.0f;
+			lmColor[1] = (float)pSr0[1] * (float)pSr1[3] / 255.0f / 255.0f;
+			lmColor[2] = (float)pSr0[2] * (float)pSr1[3] / 255.0f / 255.0f;
+#else
+			lmColor[0] = (float)pSr0[0] / 255.0f;
+			lmColor[1] = (float)pSr0[1] / 255.0f;
+			lmColor[2] = (float)pSr0[2] / 255.0f;
+#endif
+			lmColor[3] = (float)pSr0[3] / 255.0f;
+			const float lmIntens = NdotL * lmColor[3] + (1.0f - lmColor[3]);
+			pDs[0] = (byte)(lmColor[0] * lmIntens * 255.0f);
+			pDs[1] = (byte)(lmColor[1] * lmIntens * 255.0f);
+			pDs[2] = (byte)(lmColor[2] * lmIntens * 255.0f);
+			pDs[3] = 255;
+		}
+		char szCacheName[512];
+		char *pCacheName = NULL;
+		if (pszFileName)
+		{
+			snprintf(szCacheName, sizeof(szCacheName), "$LM%d$%s", nItem, pszFileName);
+			szCacheName[sizeof(szCacheName)-1] = 0;
+			pCacheName = szCacheName;
+		}
+		iColorLerpTex = pIRenderer->DownLoadToVideoMemory(pDst, iWidth, iHeight,
+			eTF_RGBA, eTF_RGBA, 0, false, FILTER_BILINEAR, 0, pCacheName);
+		delete [] pDst;
+		return new RenderLMData(pIRenderer, iColorLerpTex, 0, 0, 0);
+	}
+#endif
+
 	char szName[128];
 	if (pszFileName)
 	{
-		sprintf(szName, "$DOT3LM%d$%s", nItem, pszFileName);
+		snprintf(szName, sizeof(szName), "$DOT3LM%d$%s", nItem, pszFileName);
+		szName[sizeof(szName)-1] = 0;
 		iColorLerpTex = pIRenderer->DownLoadToVideoMemory(pColorLerp4, iWidth, iHeight, eTF_RGBA, eTF_RGBA, 0, false, FILTER_BILINEAR, 0, szName);
 	}
 	else
@@ -741,7 +790,8 @@ RenderLMData * CLMSerializationManager2::CreateLightmap(const char *pszFileName,
 	}
 	if (pszFileName)
 	{
-		sprintf(szName, "$DOT3LMDir%d$%s", nItem, pszFileName);
+		snprintf(szName, sizeof(szName), "$DOT3LMDir%d$%s", nItem, pszFileName);
+		szName[sizeof(szName)-1] = 0;
 		iDomDirectionTex = pIRenderer->DownLoadToVideoMemory(&vRGBAData[0], iWidth, iHeight, eTF_RGBA, eTF_RGBA, 0, false, FILTER_BILINEAR, 0, szName);
 	}
 	else
@@ -749,7 +799,8 @@ RenderLMData * CLMSerializationManager2::CreateLightmap(const char *pszFileName,
 #else
 	if (pszFileName)
 	{
-		sprintf(szName, "$DOT3LMDir%d$%s", nItem, pszFileName);
+		snprintf(szName, sizeof(szName), "$DOT3LMDir%d$%s", nItem, pszFileName);
+		szName[sizeof(szName)-1] = 0;
 		iDomDirectionTex = pIRenderer->DownLoadToVideoMemory(pDomDirection3, iWidth, iHeight, eTF_RGBA, eTF_RGBA, 0, false, FILTER_BILINEAR, 0, szName);
 	}
 	else
@@ -762,7 +813,8 @@ RenderLMData * CLMSerializationManager2::CreateLightmap(const char *pszFileName,
 	{
 		if (pszFileName)
 		{
-			sprintf(szName, "$DOT3LMOccl%d$%s", nItem, pszFileName);
+			snprintf(szName, sizeof(szName), "$DOT3LMOccl%d$%s", nItem, pszFileName);
+			szName[sizeof(szName)-1] = 0;
 			iOcclTex = pIRenderer->DownLoadToVideoMemory(pOccl2, iWidth, iHeight, eTF_4444, eTF_4444, 0, false, FILTER_BILINEAR, 0, szName);
 		}
 		else
@@ -772,7 +824,8 @@ RenderLMData * CLMSerializationManager2::CreateLightmap(const char *pszFileName,
 	{
 		if (pszFileName)
 		{
-			sprintf(szName, "$DOT3LMHDR%d$%s", nItem, pszFileName);
+			snprintf(szName, sizeof(szName), "$DOT3LMHDR%d$%s", nItem, pszFileName);
+			szName[sizeof(szName)-1] = 0;
 			iHDRColorLerpTex = pIRenderer->DownLoadToVideoMemory(pHDRColorLerp, iWidth, iHeight, eTF_RGBA, eTF_RGBA, 0, false, FILTER_BILINEAR, 0, szName);
 		}
 		else
@@ -828,12 +881,14 @@ RenderLMData * CLMSerializationManager2::CreateLightmap(const char *pszFileName,
     if (pszFileName)
     {
       char szCacheName[512];
-      sprintf(szCacheName, "$LM%d$%s", nItem, pszFileName);
+	      snprintf(szCacheName, sizeof(szCacheName), "$LM%d$%s", nItem, pszFileName);
+	      szCacheName[sizeof(szCacheName)-1] = 0;
       iColorLerpTex = pIRenderer->DownLoadToVideoMemory(pDst, Width, Height, eTF_8888, eTF_8888, 0, false, FILTER_BILINEAR, 0, szCacheName);
     }
-    else
-      iColorLerpTex = pIRenderer->DownLoadToVideoMemory(pDst, Width, Height, eTF_8888, eTF_8888, 0, false, FILTER_BILINEAR, 0, NULL);
-    iDomDirectionTex = 0;
+	    else
+	      iColorLerpTex = pIRenderer->DownLoadToVideoMemory(pDst, Width, Height, eTF_8888, eTF_8888, 0, false, FILTER_BILINEAR, 0, NULL);
+	    delete [] pDst;
+	    iDomDirectionTex = 0;
   }
 
 	return new RenderLMData(pIRenderer, iColorLerpTex, iHDRColorLerpTex, iDomDirectionTex, iOcclTex);

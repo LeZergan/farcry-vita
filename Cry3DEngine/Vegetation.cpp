@@ -447,7 +447,17 @@ CStatObj* CStatObjInst::GetStatObj() const
 float CStatObjInst::GetMaxViewDist()
 {
   if (GetStatObj())
-		return max(GetCVars()->e_obj_min_view_dist, GetStatObj()->GetRadius()*m_fScale*GetCVars()->e_obj_view_dist_ratio*GetViewDistRatioNormilized());
+	{
+#if defined(__vita__) || defined(LINUX)
+		/* Billboards already make distant vegetation cheap; retain enough range
+		   that whole plants do not visibly blink at the camera. */
+		const float fVitaVegetationRatio = 0.90f;
+#else
+		const float fVitaVegetationRatio = 1.0f;
+#endif
+		return max(GetCVars()->e_obj_min_view_dist, GetStatObj()->GetRadius()*m_fScale*
+			GetCVars()->e_obj_view_dist_ratio*GetViewDistRatioNormilized()*fVitaVegetationRatio);
+	}
 	
 	return 0;
 }

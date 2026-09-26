@@ -33,6 +33,10 @@
 #include "softentity.h"
 #include "physicalworld.h"
 
+#if defined(__vita__)
+#include <psp2/kernel/processmgr.h>
+#endif
+
 
 CPhysicalWorld *g_pPhysWorlds[64];
 /* Vita: was `int g_nPhysWorlds;` with no initializer, relying on BSS
@@ -115,7 +119,16 @@ void CPhysicalWorld::Init()
 	m_vars.bDoStep = 0;
 	m_vars.fixedTimestep = 0;
 	m_vars.timeGranularity = 0.0001f;
+#if defined(__vita__)
+	/* Do not feed a long streaming/render hitch back into the solver as a 100-
+	   200 ms catch-up step.  That produces a collision spiral on the following
+	   frame and visibly launches or tunnels objects.  Preserve real time down to
+	   20 Hz, then slow simulation for the exceptional frame instead of making the
+	   hitch self-perpetuating. */
+	m_vars.maxWorldStep = 0.05f;
+#else
 	m_vars.maxWorldStep = 0.2f;
+#endif
 	m_vars.iDrawHelpers = 0;
 	m_vars.nMaxSubsteps = 5;
 	m_vars.nMaxSurfaces = NSURFACETYPES;
@@ -740,6 +753,20 @@ void CPhysicalWorld::TimeStep(float time_interval, int flags)
 {
 	FUNCTION_PROFILER( GetISystem(),PROFILE_PHYSICS );
 
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	/* System-level timing showed physics consuming 22-24 ms of every gameplay
+	   frame on core 0.  Split that opaque block here before changing simulation
+	   quality or threading code: these timestamps cost five counter reads and
+	   emit one line every 120 calls. */
+	const SceUInt64 nVitaPhysStartUs = sceKernelGetProcessTimeWide();
+	SceUInt64 nVitaAfterSetupUs = nVitaPhysStartUs;
+	SceUInt64 nVitaAfterRigidUs = nVitaPhysStartUs;
+	SceUInt64 nVitaAfterLivingUs = nVitaPhysStartUs;
+	SceUInt64 nVitaAfterIndependentUs = nVitaPhysStartUs;
+	unsigned int nVitaRigidSubsteps = 0;
+	unsigned int nVitaSolvedGroups = 0;
+#endif
+
 	float m,max_time_step,time_interval_org = time_interval, Ebefore,Eafter,damping;
 	CPhysicalEntity *pent,*phead,*ptail,**pentlist,*pent_next,*pent1,*pentmax;
 	int i,j,n,iter,ipass,nGroups,bHeadAdded,bGroupFinished,bAllGroupsFinished,bStepValid,nAnimatedObjects,nEnts,bSkipFlagged;
@@ -768,6 +795,10 @@ void CPhysicalWorld::TimeStep(float time_interval, int flags)
 			pent->StartStep(time_interval_org);	// prepare to advance living entities
 	}
 
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaAfterSetupUs = sceKernelGetProcessTimeWide();
+#endif
+
 	if (!m_vars.bSingleStepMode || m_vars.bDoStep) {
 		m_nProfiledEnts = 0;
 		iter = 0;	__curstep++;
@@ -778,6 +809,9 @@ void CPhysicalWorld::TimeStep(float time_interval, int flags)
 
 		if (flags & ent_rigid) {
 			if (m_pTypedEnts[2]) do { // make as many substeps as required
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+				nVitaRigidSubsteps++;
+#endif
 				bAllGroupsFinished = 1;
 				m_pGroupNums[m_nEntsAlloc-1] = -1; // special group for rigid bodies w/ infinite mass
 				m_iSubstep++;
@@ -844,6 +878,9 @@ void CPhysicalWorld::TimeStep(float time_interval, int flags)
 					for(i=0;i<nGroups;i++) m_pGroupNums[m_pGroupIds[i]] = i;
 
 					for(i=0;i<nGroups;i++) {
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+						if (ipass==1) nVitaSolvedGroups++;
+#endif
 						m_iCurGroup = m_pGroupIds[i];
 						max_time_step = time_interval; nAnimatedObjects = 0;
 						for(ptail=m_pTmpEntList1[i]; ptail->m_next_coll; ptail=ptail->m_next_coll) ptail->m_bMoved = 0;
@@ -932,6 +969,10 @@ void CPhysicalWorld::TimeStep(float time_interval, int flags)
 			m_updateTimes[1] = m_updateTimes[2] = m_timePhysics;
 		}
 	}
+
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaAfterRigidUs = sceKernelGetProcessTimeWide();
+#endif
 	m_iSubstep++;
 
 	if (flags & ent_living) {
@@ -945,6 +986,10 @@ void CPhysicalWorld::TimeStep(float time_interval, int flags)
 		m_updateTimes[3] = m_timePhysics;
 	}
 
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaAfterLivingUs = sceKernelGetProcessTimeWide();
+#endif
+
 	if (!m_vars.bSingleStepMode || m_vars.bDoStep) {
 		if (flags & ent_independent) {
 			for(pent=m_pTypedEnts[4]; pent; pent=pent->m_next) if (!(m_bUpdateOnlyFlagged&(pent->m_flags^pef_update) | bSkipFlagged&pent->m_flags))
@@ -952,6 +997,11 @@ void CPhysicalWorld::TimeStep(float time_interval, int flags)
 			m_updateTimes[4] = m_timePhysics;
 		}
 	}
+
+
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaAfterIndependentUs = sceKernelGetProcessTimeWide();
+#endif
 
 	if (flags & ent_deleted) {
 		if (!m_vars.bSingleStepMode || m_vars.bDoStep) {
@@ -984,6 +1034,46 @@ void CPhysicalWorld::TimeStep(float time_interval, int flags)
 	}
 	m_bUpdateOnlyFlagged = 0;
 	m_bWorldStep = 0;
+
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	const SceUInt64 nVitaPhysEndUs = sceKernelGetProcessTimeWide();
+	static SceUInt64 s_nVitaSetupUs = 0;
+	static SceUInt64 s_nVitaRigidUs = 0;
+	static SceUInt64 s_nVitaLivingUs = 0;
+	static SceUInt64 s_nVitaIndependentUs = 0;
+	static SceUInt64 s_nVitaPurgeUs = 0;
+	static unsigned int s_nVitaRigidSubsteps = 0;
+	static unsigned int s_nVitaSolvedGroups = 0;
+	static unsigned int s_nVitaPhysSamples = 0;
+	s_nVitaSetupUs += nVitaAfterSetupUs - nVitaPhysStartUs;
+	s_nVitaRigidUs += nVitaAfterRigidUs - nVitaAfterSetupUs;
+	s_nVitaLivingUs += nVitaAfterLivingUs - nVitaAfterRigidUs;
+	s_nVitaIndependentUs += nVitaAfterIndependentUs - nVitaAfterLivingUs;
+	s_nVitaPurgeUs += nVitaPhysEndUs - nVitaAfterIndependentUs;
+	s_nVitaRigidSubsteps += nVitaRigidSubsteps;
+	s_nVitaSolvedGroups += nVitaSolvedGroups;
+	if (++s_nVitaPhysSamples >= 120)
+	{
+		int nVitaTypeCounts[8] = {0,0,0,0,0,0,0,0};
+		for (int nType = 0; nType < 8; ++nType)
+			for (CPhysicalEntity *pCount = m_pTypedEnts[nType]; pCount; pCount = pCount->m_next)
+				nVitaTypeCounts[nType]++;
+		if (m_pLog)
+			m_pLog->Log("\001[VITA][PHYSSTAGE] avgUs setup=%u rigid=%u living=%u independent=%u purge=%u "
+				"rigidSubstepsX100=%u solvedGroupsX100=%u ents=%d/%d/%d/%d/%d/%d/%d/%d",
+				(unsigned int)(s_nVitaSetupUs / s_nVitaPhysSamples),
+				(unsigned int)(s_nVitaRigidUs / s_nVitaPhysSamples),
+				(unsigned int)(s_nVitaLivingUs / s_nVitaPhysSamples),
+				(unsigned int)(s_nVitaIndependentUs / s_nVitaPhysSamples),
+				(unsigned int)(s_nVitaPurgeUs / s_nVitaPhysSamples),
+				(unsigned int)(s_nVitaRigidSubsteps * 100u / s_nVitaPhysSamples),
+				(unsigned int)(s_nVitaSolvedGroups * 100u / s_nVitaPhysSamples),
+				nVitaTypeCounts[0], nVitaTypeCounts[1], nVitaTypeCounts[2], nVitaTypeCounts[3],
+				nVitaTypeCounts[4], nVitaTypeCounts[5], nVitaTypeCounts[6], nVitaTypeCounts[7]);
+		s_nVitaSetupUs = s_nVitaRigidUs = s_nVitaLivingUs = s_nVitaIndependentUs = s_nVitaPurgeUs = 0;
+		s_nVitaRigidSubsteps = s_nVitaSolvedGroups = s_nVitaPhysSamples = 0;
+	}
+#endif
 }
 
 

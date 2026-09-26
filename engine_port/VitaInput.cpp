@@ -3,6 +3,7 @@
 #include <IConsole.h>
 #include <ITimer.h>
 #include <psp2/ctrl.h>
+#include <psp2/motion.h>
 #include <psp2/touch.h>
 
 #include "../CryInput/XActionMapManager.h"
@@ -12,6 +13,10 @@
 #include <math.h>
 #include <string.h>
 #include <vector>
+
+#if defined(FARCRY_VITA3K_LAB)
+extern void Vita3KLabInputBridge(SceCtrlData *pad);
+#endif
 
 namespace
 {
@@ -44,27 +49,30 @@ static const KeyName kKeyNames[] = {
 	{0,0}
 };
 
-/* Raw [-1,1] stick deflection with the dead zone removed and the remaining
-   travel rescaled, so the very first unit past the dead zone still produces a
-   near-zero value instead of a jump.  The response curve is applied separately
-   (see ApplyCurve) because movement wants the linear magnitude while aiming
-   wants the curved one. */
-static float StickAxis(unsigned char value, float deadZone)
+/* Radial [-1,1] stick deflection with the dead zone removed and remaining
+   travel rescaled.  A per-axis dead zone leaves diagonal corners outside the
+   square even while the stick is physically at rest; radial handling is what
+   prevents that motion from becoming camera drift. */
+static void StickVector(unsigned char rawX, unsigned char rawY, float deadZone,
+	float &outX, float &outY)
 {
-	float v = ((float)value - 127.5f) / 127.5f;
-	if (v > 1.0f) v = 1.0f;
-	if (v < -1.0f) v = -1.0f;
-	if (fabsf(v) <= deadZone)
-		return 0.0f;
-	return (fabsf(v) - deadZone) / (1.0f - deadZone) * (v < 0.0f ? -1.0f : 1.0f);
-}
-
-static float ApplyCurve(float v, float exponent)
-{
-	const float a = fabsf(v);
-	if (a <= 0.0f)
-		return 0.0f;
-	return powf(a, exponent) * (v < 0.0f ? -1.0f : 1.0f);
+	// Console variables are writable from scripts/config files.  Keep a bad
+	// value from turning the rescale denominator into zero and poisoning every
+	// later input event with infinities or NaNs.
+	if (deadZone < 0.0f) deadZone = 0.0f;
+	if (deadZone > 0.95f) deadZone = 0.95f;
+	float x = ((float)rawX - 127.5f) / 127.5f;
+	float y = ((float)rawY - 127.5f) / 127.5f;
+	const float magnitude = sqrtf(x*x + y*y);
+	if (magnitude <= deadZone)
+	{
+		outX = outY = 0.0f;
+		return;
+	}
+	const float clamped = magnitude > 1.0f ? 1.0f : magnitude;
+	const float scaled = (clamped - deadZone) / (1.0f - deadZone);
+	outX = (x / magnitude) * scaled;
+	outY = (y / magnitude) * scaled;
 }
 
 /* Aim rate at full right-stick deflection, expressed in the mouse-count units
@@ -74,7 +82,10 @@ static float ApplyCurve(float v, float exponent)
    port had when it applied a flat 12 counts per frame at 60Hz. */
 static const float kDefaultAimRate = 3600.0f;
 static const float kDefaultAimCurve = 2.0f;
-static const float kDefaultDeadZone = 0.18f;
+static const float kDefaultDeadZone = 0.22f;
+static const float kDefaultMoveDeadZone = 0.30f;
+static const float kDefaultMoveAxisThreshold = 0.16f;
+static const float kDefaultGyroRate = 1100.0f;
 static const float kDefaultWalkPoint = 0.65f;
 // Menu cursor speed in virtual-screen pixels per second.  Deliberately not tied
 // to the aim sensitivity: the retail Options slider is about aiming, and a
@@ -126,10 +137,12 @@ public:
 		  m_sensitivityScale(1.0f), m_buttons(0), m_prevButtons(0),
 		  m_bufferedInput(false), m_modifierConsumed(false), m_pronePrev(false),
 		  m_actionMaps(0), m_cvarsRegistered(false),
-		  m_aimRate(0), m_aimCurve(0), m_deadZone(0), m_analogWalk(0),
-		  m_walkPoint(0), m_touchEnabled(0),
+		  m_aimRate(0), m_aimCurve(0), m_deadZone(0), m_moveDeadZone(0),
+		  m_moveAxisThreshold(0), m_analogWalk(0),
+		  m_walkPoint(0), m_touchEnabled(0), m_gyroRate(0),
 		  m_touchCursor(false), m_prevTouchCursor(false), m_walking(false),
-		  m_bSeedPrevFromCurrent(false)
+		  m_bSeedPrevFromCurrent(false), m_gyroEnabled(false),
+		  m_gyroChordPrev(false), m_gyroFilteredX(0.0f), m_gyroFilteredY(0.0f)
 	{
 		memset(m_keys, 0, sizeof(m_keys));
 		memset(m_prevKeys, 0, sizeof(m_prevKeys));
@@ -174,7 +187,23 @@ public:
 
 		SceCtrlData pad;
 		memset(&pad, 0, sizeof(pad));
-		sceCtrlPeekBufferPositive(0, &pad, 1);
+		/* A failed/non-ready peek leaves the caller's buffer untouched.  Zero is
+		   not the centre of a Vita analogue stick: it is full up-left, so the old
+		   memset turned a transient sampling miss (most visible while firing in a
+		   busy fight) into violent camera drift.  Seed the four axes at centre and
+		   only consume real bytes when the API reports a sample. */
+		pad.lx = pad.ly = pad.rx = pad.ry = 128;
+		const int nPadSamples = sceCtrlPeekBufferPositive(0, &pad, 1);
+		if (nPadSamples <= 0)
+		{
+			/* Keep the previous digital state across a missed sample.  Synthesising
+			   a release followed by a press re-fired the Space/Cross SkipCutScene
+			   binding several seconds into otherwise healthy cinematics. */
+			pad.buttons = m_buttons;
+			static unsigned int s_nPadMisses = 0;
+			if (++s_nPadMisses == 1 && m_system && m_system->GetILog())
+				m_system->GetILog()->LogToFile("\001[VITA][INPUT] controller sample missed; centred analogue fallback active");
+		}
 #if defined(VITA_DEBUG_AUTOTEST_MENU)
 		/* Deterministic Vita3K-only UI verification.  Host keyboard injection
 		   into Vita3K is unreliable in the headless runner, so pulse the actual
@@ -199,7 +228,7 @@ public:
 			((s_menuAutotestFrames - 210) % 10) == 0)
 			pad.buttons |= SCE_CTRL_SELECT;
 #endif
-#if defined(VITA_DEBUG_AUTOLOAD_TRAINING)
+#if defined(VITA_DEBUG_AUTOLOAD_TRAINING) && !defined(FARCRY_VITA3K_LAB)
 		/* Vita3K's host keyboard cannot be injected reliably from the headless
 		   regression runner.  Autotest builds therefore hold the real Vita left
 		   stick forward after startup, through the same mapping used on hardware,
@@ -209,21 +238,62 @@ public:
 		if (++s_autotestInputFrames > 600 && s_autotestInputFrames <= 900)
 			pad.ly = 0;
 #endif
+	#if defined(FARCRY_VITA3K_LAB)
+		// Lab input is neutral unless an explicit, expiring request is active.
+		// It still passes through the production action maps and physics below.
+		Vita3KLabInputBridge(&pad);
+	#endif
 		m_buttons = pad.buttons;
+		const bool gyroChord = (pad.buttons & (SCE_CTRL_TRIANGLE | SCE_CTRL_CIRCLE)) ==
+			(SCE_CTRL_TRIANGLE | SCE_CTRL_CIRCLE);
+		if (gyroChord && !m_gyroChordPrev)
+		{
+			if (!m_gyroEnabled)
+			{
+				m_gyroEnabled = sceMotionStartSampling() >= 0;
+				if (m_gyroEnabled)
+				{
+					sceMotionReset();
+					m_gyroFilteredX = m_gyroFilteredY = 0.0f;
+				}
+			}
+			else
+			{
+				sceMotionStopSampling();
+				m_gyroEnabled = false;
+				m_gyroFilteredX = m_gyroFilteredY = 0.0f;
+			}
+			if (m_system && m_system->GetILog())
+				m_system->GetILog()->LogToFile("\001[VITA][GYRO] %s Triangle+Circle",
+					m_gyroEnabled ? "enabled" : "disabled");
+		}
+		m_gyroChordPrev = gyroChord;
 
 		const float deadZone = CVarF(m_deadZone, kDefaultDeadZone);
-		const float lx = StickAxis(pad.lx, deadZone);
-		const float ly = StickAxis(pad.ly, deadZone);
+		const float moveDeadZone = CVarF(m_moveDeadZone, kDefaultMoveDeadZone);
+		float lx, ly;
+		StickVector(pad.lx, pad.ly, moveDeadZone, lx, ly);
+		/* Far Cry consumes movement as four digital keys, so the old 0.05
+		   threshold turned the first tiny post-dead-zone left/right component
+		   into full-speed strafing.  Suppress a minor horizontal component while
+		   the player is mainly pushing forward/back, but preserve intentional
+		   diagonals and full strafing. */
+		const float moveAxisThreshold = CVarF(m_moveAxisThreshold, kDefaultMoveAxisThreshold);
+		if (fabsf(lx) < moveAxisThreshold || fabsf(lx) < fabsf(ly) * 0.35f)
+			lx = 0.0f;
+		if (fabsf(ly) < moveAxisThreshold)
+			ly = 0.0f;
 		const bool modifier = (pad.buttons & SCE_CTRL_SELECT) != 0;
 		const bool modifierChord = modifier && (pad.buttons &
 			(SCE_CTRL_CROSS | SCE_CTRL_SQUARE | SCE_CTRL_TRIANGLE |
-			 SCE_CTRL_CIRCLE | SCE_CTRL_LEFT | SCE_CTRL_DOWN | SCE_CTRL_START));
+			 SCE_CTRL_CIRCLE | SCE_CTRL_LEFT | SCE_CTRL_RIGHT |
+			 SCE_CTRL_DOWN | SCE_CTRL_START));
 		if (!modifier)
 			m_modifierConsumed = false;
 		else if (modifierChord)
 			m_modifierConsumed = true;
-		SetKey(XKEY_A, lx < -0.05f); SetKey(XKEY_D, lx > 0.05f);
-		SetKey(XKEY_W, ly < -0.05f); SetKey(XKEY_S, ly > 0.05f);
+		SetKey(XKEY_A, lx < 0.0f); SetKey(XKEY_D, lx > 0.0f);
+		SetKey(XKEY_W, ly < 0.0f); SetKey(XKEY_S, ly > 0.0f);
 
 		/* Analog movement.  Far Cry's move actions are digital, but it does
 		   model a real walk/run distinction (ACTION_WALK, normally Z), so the
@@ -244,8 +314,36 @@ public:
 
 		const float aimRate = CVarF(m_aimRate, kDefaultAimRate) * frameTime;
 		const float aimCurve = CVarF(m_aimCurve, kDefaultAimCurve);
-		m_mouseX = ApplyCurve(StickAxis(pad.rx, deadZone), aimCurve) * aimRate;
-		m_mouseY = ApplyCurve(StickAxis(pad.ry, deadZone), aimCurve) * aimRate;
+		float rx, ry;
+		StickVector(pad.rx, pad.ry, deadZone, rx, ry);
+		const float aimMagnitude = sqrtf(rx*rx + ry*ry);
+		const float curvedAim = aimMagnitude > 0.0f ? powf(aimMagnitude, aimCurve) : 0.0f;
+		m_mouseX = aimMagnitude > 0.0f ? (rx / aimMagnitude) * curvedAim * aimRate : 0.0f;
+		m_mouseY = aimMagnitude > 0.0f ? (ry / aimMagnitude) * curvedAim * aimRate : 0.0f;
+
+		/* Motion input is opt-in and only contributes during gameplay.  The small
+		   angular dead band rejects sensor bias, while the low-pass filter removes
+		   hand tremor without the self-moving camera caused by filtering absolute
+		   orientation.  Right-stick aim remains available at the same time. */
+		const bool uiOwnsAim = s_uiCursorActive || (m_exclusive != 0);
+		if (m_gyroEnabled && !uiOwnsAim)
+		{
+			SceMotionState motion;
+			memset(&motion, 0, sizeof(motion));
+			if (sceMotionGetState(&motion) >= 0)
+			{
+				float targetX = -motion.angularVelocity.y;
+				float targetY = -motion.angularVelocity.x;
+				if (fabsf(targetX) < 0.025f) targetX = 0.0f;
+				if (fabsf(targetY) < 0.025f) targetY = 0.0f;
+				const float blend = std::min(1.0f, frameTime * 18.0f);
+				m_gyroFilteredX += (targetX - m_gyroFilteredX) * blend;
+				m_gyroFilteredY += (targetY - m_gyroFilteredY) * blend;
+				const float gyroStep = CVarF(m_gyroRate, kDefaultGyroRate) * frameTime;
+				m_mouseX += m_gyroFilteredX * gyroStep;
+				m_mouseY += m_gyroFilteredY * gyroStep;
+			}
+		}
 
 		/* Front touch drives the pointer only while the retail UI is on screen.
 		   In gameplay the cursor is invisible and mouse1 is the trigger, so a
@@ -259,19 +357,24 @@ public:
 		{
 			const float cursorStep = kCursorPixelsPerSecond * frameTime;
 			m_vscreenX = std::max(0.0f, std::min(800.0f,
-				m_vscreenX + StickAxis(pad.rx, deadZone) * cursorStep));
+				m_vscreenX + rx * cursorStep));
 			m_vscreenY = std::max(0.0f, std::min(600.0f,
-				m_vscreenY + StickAxis(pad.ry, deadZone) * cursorStep));
+				m_vscreenY + ry * cursorStep));
 		}
 
-		SetKey(XKEY_SPACE,    !modifier && (pad.buttons & SCE_CTRL_CROSS));
+		/* Space is also bound globally to SkipCutScene.  While the movie system
+		   owns controls through player_dead, an ordinary Cross press must not
+		   terminate a cinematic; reserve that destructive action for the explicit
+		   Select+Start/F7 chord below. */
+		const bool cinematicControls = IsPlayerDeadActionMap();
+		SetKey(XKEY_SPACE,    !cinematicControls && !modifier && (pad.buttons & SCE_CTRL_CROSS));
 		/* Retail UI buttons activate on Return, while gameplay binds jump to
 		   Space.  Emit both logical keys for Cross so the same physical button
 		   works in the complete menu flow without breaking the stock action map. */
 		SetKey(XKEY_RETURN,   !modifier && (pad.buttons & SCE_CTRL_CROSS));
 		SetKey(XKEY_R,        !modifier && (pad.buttons & SCE_CTRL_SQUARE));
-		SetKey(XKEY_F,        !modifier && (pad.buttons & SCE_CTRL_TRIANGLE));
-		SetKey(XKEY_LCONTROL, !modifier && (pad.buttons & SCE_CTRL_CIRCLE));
+		SetKey(XKEY_F,        !modifier && !gyroChord && (pad.buttons & SCE_CTRL_TRIANGLE));
+		SetKey(XKEY_LCONTROL, !modifier && !gyroChord && (pad.buttons & SCE_CTRL_CIRCLE));
 		SetKey(XKEY_ESCAPE,   !modifier && (pad.buttons & SCE_CTRL_START));
 		SetKey(XKEY_TAB,      modifier && !m_modifierConsumed);
 		SetKey(XKEY_UP,       !modifier && (pad.buttons & SCE_CTRL_UP));
@@ -291,9 +394,12 @@ public:
 		   press never fires two actions. */
 		SetKey(XKEY_LSHIFT, modifier && (pad.buttons & SCE_CTRL_CROSS));
 		SetKey(XKEY_L,      modifier && (pad.buttons & SCE_CTRL_SQUARE));
-		SetKey(XKEY_B,      modifier && (pad.buttons & SCE_CTRL_TRIANGLE));
-		SetKey(XKEY_T,      modifier && (pad.buttons & SCE_CTRL_CIRCLE));
+		SetKey(XKEY_B,      modifier && !gyroChord && (pad.buttons & SCE_CTRL_TRIANGLE));
+		SetKey(XKEY_T,      modifier && !gyroChord && (pad.buttons & SCE_CTRL_CIRCLE));
 		SetKey(XKEY_H,      modifier && (pad.buttons & SCE_CTRL_LEFT));
+		/* Drop weapon (J in the retail profile) was the last campaign action
+		   with no physical route at all.  Select+D-pad Right was unused. */
+		SetKey(XKEY_J,      modifier && (pad.buttons & SCE_CTRL_RIGHT));
 		/* Prone is a toggle, not a hold: XPlayer::ProcessActions acts on
 		   ACTION_MOVEMODE2 and then removes it from the command the same
 		   frame, so a key held down re-triggers it every frame and flips
@@ -304,7 +410,8 @@ public:
 		const bool proneNow = modifier && (pad.buttons & SCE_CTRL_DOWN) != 0;
 		SetKey(XKEY_V,      proneNow && !m_pronePrev);
 		m_pronePrev = proneNow;
-		SetKey(XKEY_F1,     modifier && (pad.buttons & SCE_CTRL_START));
+		SetKey(XKEY_F1,     !cinematicControls && modifier && (pad.buttons & SCE_CTRL_START));
+		SetKey(XKEY_F7,     cinematicControls && modifier && (pad.buttons & SCE_CTRL_START));
 
 		/* Leaning is the one common FPS action with no button left, and the rear
 		   panel is otherwise idle: its left half leans left, its right half
@@ -353,7 +460,12 @@ public:
 		}
 	}
 
-	void ShutDown() { delete this; }
+	void ShutDown()
+	{
+		if (m_gyroEnabled)
+			sceMotionStopSampling();
+		delete this;
+	}
 	void Shutdown() {}
 	void SetMouseExclusive(bool, void * = 0) {}
 	void SetKeyboardExclusive(bool, void * = 0) {}
@@ -449,6 +561,7 @@ public:
 				case XKEY_B: return "Select + Triangle";
 				case XKEY_T: return "Select + Circle";
 				case XKEY_H: return "Select + D-Pad Left";
+				case XKEY_J: return "Select + D-Pad Right";
 				case XKEY_V: return "Select + D-Pad Down";
 				case XKEY_F1: return "Select + Start";
 				case XKEY_Z: return "Left Stick (partial)";
@@ -546,14 +659,20 @@ private:
 			"Right stick turn rate, in mouse counts per second at full deflection");
 		m_aimCurve = pConsole->CreateVariable("i_vita_aim_curve", "2", 0,
 			"Right stick response exponent; 1 is linear, higher is finer near centre");
-		m_deadZone = pConsole->CreateVariable("i_vita_deadzone", "0.18", 0,
-			"Analog stick dead zone, 0 to 1");
+		m_deadZone = pConsole->CreateVariable("i_vita_deadzone", "0.22", 0,
+			"Right-stick dead zone, 0 to 1");
+		m_moveDeadZone = pConsole->CreateVariable("i_vita_move_deadzone", "0.30", 0,
+			"Left-stick radial dead zone, 0 to 1");
+		m_moveAxisThreshold = pConsole->CreateVariable("i_vita_move_axis_threshold", "0.16", 0,
+			"Minimum post-dead-zone left-stick axis before a digital move key is pressed");
 		m_analogWalk = pConsole->CreateVariable("i_vita_analog_walk", "1", 0,
 			"Partly pushed left stick walks instead of running");
 		m_walkPoint = pConsole->CreateVariable("i_vita_walk_point", "0.65", 0,
 			"Left stick deflection above which the player runs");
 		m_touchEnabled = pConsole->CreateVariable("i_vita_touch", "1", 0,
 			"Front touch drives the menu pointer, rear touch leans");
+		m_gyroRate = pConsole->CreateVariable("i_vita_gyro_rate", "1100", 0,
+			"Gyro aim sensitivity in mouse counts per radian");
 	}
 
 	static float CVarF(ICVar *pVar, float fallback) { return pVar ? pVar->GetFVal() : fallback; }
@@ -563,6 +682,12 @@ private:
 	{
 		return m_actionMaps &&
 			strcmp(m_actionMaps->GetCurrentActionMapName(), "vehicle") == 0;
+	}
+
+	bool IsPlayerDeadActionMap() const
+	{
+		return m_actionMaps &&
+			strcmp(m_actionMaps->GetCurrentActionMapName(), "player_dead") == 0;
 	}
 
 	//! Places the virtual cursor under the finger and reports whether the panel
@@ -639,12 +764,19 @@ private:
 	ICVar *m_aimRate;
 	ICVar *m_aimCurve;
 	ICVar *m_deadZone;
+	ICVar *m_moveDeadZone;
+	ICVar *m_moveAxisThreshold;
 	ICVar *m_analogWalk;
 	ICVar *m_walkPoint;
 	ICVar *m_touchEnabled;
+	ICVar *m_gyroRate;
 	bool m_touchCursor;
 	bool m_prevTouchCursor;
 	bool m_walking;
+	bool m_gyroEnabled;
+	bool m_gyroChordPrev;
+	float m_gyroFilteredX;
+	float m_gyroFilteredY;
 };
 
 void CVitaKeyboard::ShutDown() {}

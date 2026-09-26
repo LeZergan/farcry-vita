@@ -192,12 +192,32 @@ int main(int argc, char *argv[]) {
 	   VitaBootMark is defined above main(). */
 	VitaBootMark("main() entered, heap=%u MiB", _newlib_heap_size_user / (1024u * 1024u));
 
+	bool bDataRootReady = false;
 	if (chdir("ux0:data/farcry") == 0)
-		sceClibPrintf("[BOOTTRACE] main: data root ux0:data/farcry\n");
-	else if (chdir("ux0:app/FCRY00002") == 0)
-		sceClibPrintf("[BOOTTRACE] main: data root ux0:app/FCRY00002 (no ux0:data/farcry)\n");
-	else
-		sceClibPrintf("[BOOTTRACE] main: no data root found, using current directory\n");
+	{
+		/* The diagnostics directory is created before a retail-data install and
+		   can therefore exist with only Log.txt/boot_marker.txt in it.  Treating
+		   directory existence as proof of a game install made the engine miss
+		   Scripts.pak, lose the whole UI/game script layer and then die during
+		   startup.  Validate one mandatory retail pack before committing to the
+		   writable data root. */
+		FILE *pScripts = fopen("fcdata/Scripts.pak", "rb");
+		if (pScripts)
+		{
+			fclose(pScripts);
+			bDataRootReady = true;
+			sceClibPrintf("[BOOTTRACE] main: data root ux0:data/farcry\n");
+		}
+		else
+			sceClibPrintf("[BOOTTRACE] main: ux0:data/farcry has no fcdata/Scripts.pak, trying app data\n");
+	}
+	if (!bDataRootReady)
+	{
+		if (chdir("ux0:app/FCRY00002") == 0)
+			sceClibPrintf("[BOOTTRACE] main: data root ux0:app/FCRY00002\n");
+		else
+			sceClibPrintf("[BOOTTRACE] main: no usable data root found, using current directory\n");
+	}
 
 	// Proven settings used by mature vitaGL FPS ports (vitaRTCW/d3es-vita):
 	// run the retail Vita clocks, including the GPU crossbar, before engine
@@ -320,29 +340,65 @@ int main(int argc, char *argv[]) {
 			   is where the object and vegetation counts actually bite.  Character
 			   skinning now runs for real as well, so there is less budget left for
 			   scenery than when these were first chosen. */
-			{ "e_obj_view_dist_ratio",              "14"   },
-			{ "e_obj_lod_ratio",                    "3"    },
-			{ "e_terrain_lod_ratio",                "3.0"  },
-			/* Vegetation.  The sprite distance was pushed down to 0.22 chasing
-			   frame rate, and that is too far: a tree swapped to a billboard
-			   while it is still close reads as a flat brown slab standing in the
-			   world, which is what the large angular shapes in the foreground
-			   are.  Back to a value where the swap happens at a distance the
-			   billboard can actually pass for a tree -- the frame budget can
-			   afford it now that it sits at 55-60 rather than 26. */
-			{ "e_vegetation_sprites_distance_ratio","0.6"  },
-			{ "e_vegetation_min_size",              "2.5"  },
+			{ "e_obj_view_dist_ratio",              "6.5"  },
+			{ "e_obj_lod_ratio",                    "2.0"  },
+			{ "e_terrain_lod_ratio",                "5.0"  },
+			/* The Vita billboard path now renders real generated tree sprites.
+			   Switch earlier and omit tiny undergrowth so CPU submission is spent on
+			   actors and nearby cover rather than hundreds of distant meshes. */
+			{ "e_vegetation_sprites_distance_ratio","0.15" },
+			{ "e_vegetation_sprites_min_distance",  "4.0"  },
+			{ "e_vegetation_sprites_slow_switch",   "0"    },
+			{ "e_vegetation_min_size",              "7.0"  },
+			{ "e_vegetation_sprites_texres",         "1"    },
+			{ "e_vegetation_bending",               "0"    },
+			{ "e_objects_fade_on_distance",          "1"    },
 			// Whole subsystems the hardware cannot afford.
 			{ "e_detail_objects",                   "0"    },
+			/* CE1's close terrain detail path regenerates splat geometry and submits
+			   many extra draws.  The Vita base cover is retained at 512px instead. */
 			{ "e_detail_texture",                   "0"    },
+			{ "e_beach",                            "0"    },
 			{ "e_shadow_maps",                      "0"    },
 			{ "e_shadow_maps_from_static_objects",  "0"    },
 			{ "e_stencil_shadows",                  "0"    },
 			{ "e_bflyes",                           "0"    },
 			// Fill-rate and per-frame CPU work.
-			{ "e_particles_max_count",              "96"   },
-			{ "e_max_entity_lights",                "1"    },
+			{ "e_particles_max_count",              "16"   },
+			{ "e_particles_lod",                    "0.4"  },
+			{ "e_max_entity_lights",                "0"    },
 			{ "e_decals",                           "0"    },
+			{ "e_deformable_terrain",                "0"    },
+			{ "es_EnableCloth",                     "0"    },
+			{ "es_HitDeadBodies",                   "0"    },
+			/* Fight spikes are dominated by collision solving, visibility rays and
+			   short-lived effects.  Keep gameplay simulation at the 30 FPS target
+			   while bounding worst-case work instead of allowing desktop-scale
+			   solver iteration/contact budgets. */
+			{ "p_max_substeps",                     "3"    },
+			{ "p_max_MC_iters",                     "2000" },
+			{ "p_max_contacts",                     "96"   },
+			{ "p_max_LCPCG_subiters",               "64"   },
+			{ "p_max_LCPCG_subiters_final",         "128"  },
+			{ "p_max_LCPCG_microiters",             "4096" },
+			{ "p_max_LCPCG_microiters_final",       "8192" },
+			{ "p_max_LCPCG_iters",                  "4"    },
+			{ "ai_max_vis_rays_per_frame",          "16"   },
+			/* The Vita mixer exposes 32 channels, so traversing one hundred active
+			   spots and ten connected indoor areas on core 0 can only discard work.
+			   Keep headroom for combat dialogue while bounding SoundSystem tail spikes. */
+			{ "s_MaxActiveSoundSpots",              "40"   },
+			{ "s_VisAreasPropagation",              "6"    },
+			{ "g_maxfps",                           "30"   },
+			{ "r_lightmaps",                        "1"    },
+			/* The compact backend already renders one diffuse stage plus baked
+			   lighting.  Prevent the desktop material system from scheduling detail
+			   and accurate-particle work that has no faithful Vita stage. */
+			{ "r_DetailTextures",                   "0"    },
+			{ "r_AccurateParticles",                "0"    },
+			/* A bounded tail of the previous run is now safe to preload: 64
+			   textures maximum and a 48 MB vitaGL reserve. */
+			{ "r_vita_progcache_warm",              "1"    },
 			/* Character cost.  Skinning is CPU work per visible character per
 			   frame and it is new -- it never ran on this port until the renderer
 			   started calling ProcessSkinning.  ca_LodBias multiplies the distance
@@ -350,12 +406,26 @@ int main(int argc, char *argv[]) {
 			   down sooner; the higher MinVertexWeight thresholds truncate the
 			   weakest bone influences, which is the per-vertex cost itself.  None
 			   of this touches the animation, only how finely it is applied. */
-			{ "ca_LodBias",                         "0.4"  },
-			{ "ca_MinVertexWeightLOD0",             "0.15" },
-			{ "ca_MinVertexWeightLOD1",             "0.4"  },
+			/* The previous 3.2x LOD bias and doubled weight cutoff visibly snapped
+			   characters between meshes and removed weakly weighted limbs/clothing.
+			   Skinning is only ~0.3 ms in device captures, so preserve animation
+			   correctness instead of spending quality for negligible savings. */
+			{ "ca_LodBias",                         "0.18" },
+			{ "ca_MinVertexWeightLOD0",             "0.08" },
+			{ "ca_MinVertexWeightLOD1",             "0.3"  },
+			/* This renderer has no normal/tangent lighting stage, no stencil
+			   shadows and no character-decal pass.  Do not run their character-side
+			   preparation every frame only to discard the result. */
+			{ "ca_EnableTangentSkinning",            "0"    },
+			{ "ca_EnableCharacterShadowVolume",      "0"    },
+			{ "ca_EnableDecals",                     "0"    },
+			{ "ca_EnableLightUpdate",                "0"    },
 			// Water is a large, always-visible surface on this level.
 			{ "e_water_ocean_sun_reflection",       "0"    },
 			{ "e_water_ocean_tesselation",          "0"    },
+			/* Keep baked lighting loaded.  The lightmap-off experiment made most
+			   world vertex colours multiply down to black on the Vita backend. */
+			{ "e_light_maps",                       "1"    },
 		};
 		int nApplied = 0;
 		for (unsigned i = 0; i < sizeof(s_arrVitaTuning) / sizeof(s_arrVitaTuning[0]); ++i)

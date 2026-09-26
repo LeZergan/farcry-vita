@@ -183,6 +183,61 @@ void CSectorInfo::UpdateVarBuffer()
 {
   CArrayInfo * pArrayInfo = &m_ArrayInfo;
 
+#if defined(__vita__) || defined(LINUX)
+  /* The Vita renderer submits triangle lists directly.  Converting the
+     terrain strips later, in CLeafBuffer::AddRenderElements, was only correct
+     for the first frame: this function restores the original strip index
+     stream on every subsequent update while the leaf buffer remains marked as
+     triangles.  Convert at the producer instead, every time neighbour/Lod
+     stitching rebuilds the strip stream, and keep chunk offsets in the same
+     representation as the uploaded indices. */
+  std::vector<ushort> vitaTriangleIndices;
+  const ushort *pStripIndices = pArrayInfo->idx_array.GetElements();
+  vitaTriangleIndices.reserve((size_t)pArrayInfo->idx_array.Count() * 3);
+
+  for (int nStrip = 0; nStrip < pArrayInfo->strip_info.Count(); ++nStrip)
+  {
+    const int nFirst = pArrayInfo->strip_info[nStrip].begin;
+    const int nCount = pArrayInfo->strip_info[nStrip].end - nFirst;
+    for (int n = 0; n + 2 < nCount; ++n)
+    {
+      const ushort a = pStripIndices[nFirst + n];
+      const ushort b = pStripIndices[nFirst + n + 1];
+      const ushort c = pStripIndices[nFirst + n + 2];
+      if (a == b || b == c || a == c)
+        continue;
+      if (n & 1)
+      {
+        vitaTriangleIndices.push_back(b);
+        vitaTriangleIndices.push_back(a);
+      }
+      else
+      {
+        vitaTriangleIndices.push_back(a);
+        vitaTriangleIndices.push_back(b);
+      }
+      vitaTriangleIndices.push_back(c);
+    }
+  }
+
+  ushort *pUploadIndices = vitaTriangleIndices.empty() ? NULL : &vitaTriangleIndices[0];
+  const int nUploadIndexCount = (int)vitaTriangleIndices.size();
+  const int nUploadPrimitive = R_PRIMV_TRIANGLES;
+  const int nUploadMatInfoCount = nUploadIndexCount > 0 ? 1 : 0;
+  static bool s_bReportedVitaTerrainIndices = false;
+  if (!s_bReportedVitaTerrainIndices && GetLog())
+  {
+    s_bReportedVitaTerrainIndices = true;
+    GetLog()->Log("\001[VITA][PERF] terrain strips converted before upload: strips=%d indices=%d->%d",
+      pArrayInfo->strip_info.Count(), pArrayInfo->idx_array.Count(), nUploadIndexCount);
+  }
+#else
+  ushort *pUploadIndices = pArrayInfo->idx_array.GetElements();
+  const int nUploadIndexCount = pArrayInfo->idx_array.Count();
+  const int nUploadPrimitive = R_PRIMV_MULTI_STRIPS;
+  const int nUploadMatInfoCount = CTerrain::GetSectorSize()+16;
+#endif
+
   // if changing lod or there is no buffer allocated - reallocate
   if(!m_pLeafBuffer || m_cPrevGeomMML != m_cGeometryMML)
   { 
@@ -191,9 +246,9 @@ void CSectorInfo::UpdateVarBuffer()
 
     m_pLeafBuffer = GetRenderer()->CreateLeafBufferInitialized(
       m_pTerrain->m_lstSectorVertArray.GetElements(), m_pTerrain->m_lstSectorVertArray.Count(), VERTEX_FORMAT_P3F_N_COL4UB_COL4UB,
-      pArrayInfo->idx_array.GetElements(), pArrayInfo->idx_array.Count(),
-      R_PRIMV_MULTI_STRIPS, "TerrainSector", eBT_Static,
-      CTerrain::GetSectorSize()+16, 
+      pUploadIndices, nUploadIndexCount,
+      nUploadPrimitive, "TerrainSector", eBT_Static,
+	      nUploadMatInfoCount,
 	      m_nTextureID ? m_nTextureID : 0x1000, NULL, NULL, false, false);
 
     assert(m_pLeafBuffer);
@@ -211,8 +266,22 @@ void CSectorInfo::UpdateVarBuffer()
 
   int i; 
 
-  m_pLeafBuffer->UpdateSysIndices(pArrayInfo->idx_array.GetElements(), pArrayInfo->idx_array.Count());
+  m_pLeafBuffer->UpdateSysIndices(pUploadIndices, nUploadIndexCount);
 
+#if defined(__vita__) || defined(LINUX)
+  const int nTerrainChunks = nUploadIndexCount > 0 ? 1 : 0;
+  while(m_pLeafBuffer->m_pMats->Count()>nTerrainChunks)
+    m_pLeafBuffer->m_pMats->Delete(m_pLeafBuffer->m_pMats->Count()-1);
+
+  if (nTerrainChunks)
+  {
+    m_pLeafBuffer->SetChunk(m_pCurShader, 0, m_nSecVertsCount,
+      0, nUploadIndexCount, 0);
+
+    if(m_pLeafBuffer->m_pMats->Get(0)->pRE)
+      m_pLeafBuffer->m_pMats->Get(0)->pRE->m_CustomData = m_arrTexOffsets;
+  }
+#else
   while(m_pLeafBuffer->m_pMats->Count()>pArrayInfo->strip_info.Count())
     m_pLeafBuffer->m_pMats->Delete(m_pLeafBuffer->m_pMats->Count()-1);
 
@@ -232,6 +301,7 @@ void CSectorInfo::UpdateVarBuffer()
     if(m_pLeafBuffer->m_pMats->Get(i-j)->pRE)
       m_pLeafBuffer->m_pMats->Get(i-j)->pRE->m_CustomData = m_arrTexOffsets;
   }
+#endif
 
   assert(m_pLeafBuffer->m_pMats->Count() <= CTerrain::GetSectorSize()+16);
 }

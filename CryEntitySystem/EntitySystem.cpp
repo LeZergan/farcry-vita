@@ -203,6 +203,10 @@ void CEntitySystem::InsertEntity( EntityId id, CEntity *pEntity )
 		
 		m_pISystem->GetILog()->Log("ENTITY id=%d class=\"%s\" already spawned on this client...override",it->second->GetId(),it->second->GetEntityClassName());
 	}
+	else
+	{
+		m_vUpdateEntities.push_back(pEntity);
+	}
 		
 //		CConsole::Exit("CEntitySystem::InsertEntity - Entity already in map !");
 
@@ -217,6 +221,7 @@ bool CEntitySystem::Init(ISystem *pSystem)
 	//m_pSink=NULL;
 	m_lstSinks.clear();
 	m_mapEntities.clear();
+	m_vUpdateEntities.clear();
 
 	m_pScriptSystem=pSystem->GetIScriptSystem();
 
@@ -293,6 +298,7 @@ void CEntitySystem::Reset()
 
 	m_EntityIDGenerator.Reset();
 	m_timersMap.clear();
+	m_vUpdateEntities.clear();
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -323,6 +329,12 @@ void CEntitySystem::DeleteEntity( IEntity *entity )
 		ce->ShutDown();
 		int id = ce->GetId();
 		m_mapEntities.erase( id );
+		/* Update may delete the current entity or a later one.  Tombstone the
+		   mirror before freeing it so the indexed loop never dereferences a stale
+		   pointer; sparse tombstones are compacted periodically below. */
+		EntityVector::iterator updateIt = std::find(m_vUpdateEntities.begin(), m_vUpdateEntities.end(), ce);
+		if (updateIt != m_vUpdateEntities.end())
+			*updateIt = NULL;
 
 //		m_pISystem->GetILog()->Log("CEntitySystem::DeleteEntity %d",id);
 
@@ -758,12 +770,26 @@ void CEntitySystem::Update()
 
 	if (!bProfileEntities)
 	{	
+#if defined(__vita__)
+		for (size_t i = 0; i < m_vUpdateEntities.size(); ++i)
+		{
+			CEntity *ce = m_vUpdateEntities[i];
+			if (ce)
+				UpdateEntity(ce, ctx);
+		}
+		static unsigned int s_nVitaEntityCompactFrame = 0;
+		if ((++s_nVitaEntityCompactFrame % 300u) == 0)
+			m_vUpdateEntities.erase(
+				std::remove(m_vUpdateEntities.begin(), m_vUpdateEntities.end(), (CEntity *)NULL),
+				m_vUpdateEntities.end());
+#else
 		for (EntityMap::iterator it = m_mapEntities.begin(); it != m_mapEntities.end();it = next)
 		{
 			next = it; next++;
 			CEntity *ce= it->second;
 			UpdateEntity(ce,ctx);
 		}
+#endif
 	}
 	else
 	{		

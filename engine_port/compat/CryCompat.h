@@ -77,6 +77,9 @@ inline void EnterCriticalSection(CRITICAL_SECTION *cs)  {
 	CRYCOMPAT_TRACE("[CRITSEC] Enter cs=%p\n", (void*)cs);
 	pthread_mutex_lock(&cs->m);
 }
+inline int TryEnterCriticalSection(CRITICAL_SECTION *cs) {
+	return pthread_mutex_trylock(&cs->m) == 0;
+}
 inline void LeaveCriticalSection(CRITICAL_SECTION *cs)  {
 	CRYCOMPAT_TRACE("[CRITSEC] Leave cs=%p\n", (void*)cs);
 	pthread_mutex_unlock(&cs->m);

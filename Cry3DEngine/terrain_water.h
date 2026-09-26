@@ -19,10 +19,16 @@
 #define RECURSION_LEVELS_NUM 2
 #define CYCLE_BUFFERS_NUM    2
 
+#if defined(__vita__) || defined(LINUX)
+typedef struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F WaterOceanVertex;
+#else
+typedef struct_VERTEX_FORMAT_P3F_COL4UB WaterOceanVertex;
+#endif
+
 class CWaterOcean : public Cry3DEngineBase
 {
   float m_fWaterTranspRatio, m_fWaterReflectRatio, m_fWaterBumpAmountX, m_fWaterBumpAmountY, m_fWaterBorderTranspRatio;
-	list2<struct_VERTEX_FORMAT_P3F_COL4UB> Verts_DWQ;
+	list2<WaterOceanVertex> Verts_DWQ;
   list2<ushort> Indices_DWQ;
 	list2<ushort> lstFirstIdxId;
 

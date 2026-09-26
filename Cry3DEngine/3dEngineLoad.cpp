@@ -134,7 +134,16 @@ bool C3DEngine::LoadLevel(const char * szFolderName, const char * szMissionName,
 {
 	AUTO_PROFILE_SECTION(GetTimer(), m_dLoadLevelTime);
 
+	/* The desktop shader compiler can discard fake/NoDraw CGF slots and remap
+	   their faces safely.  The compact Vita renderer needs those original slots
+	   intact so it can recognise collision, obstruct and NoDraw faces itself.
+	   Dropping the slots here remapped their triangles onto material zero and
+	   turned hidden proxy geometry into visible white/red planes. */
+#if defined(__vita__) || defined(LINUX)
+	m_bIgnoreFakeMaterialsInCGF = false;
+#else
 	m_bIgnoreFakeMaterialsInCGF = !bEditorMode;
+#endif
 	m_bEditorMode = bEditorMode;
 
   GetRenderer()->MakeCurrent();

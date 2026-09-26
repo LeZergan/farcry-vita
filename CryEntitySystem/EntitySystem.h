@@ -189,6 +189,10 @@ private:
 
 	SinkList								m_lstSinks;
 	EntityMap								m_mapEntities;
+	/* Contiguous traversal mirror for the hot Update path.  The level contains
+	   more than ten thousand entities; walking an ordered map node-by-node every
+	   frame wastes cache and branch bandwidth even though most are sleeping. */
+	EntityVector						m_vUpdateEntities;
 	EntityVector						m_vEntitiesInFrustrum;
 	//[kirill] - need this one to get visible entities on update of some entity - so we don't depend on update's order 
 	EntityVector						m_vEntitiesInFrustrumPrevFrame;

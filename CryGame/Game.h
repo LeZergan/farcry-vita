@@ -445,7 +445,7 @@ public:
 	bool GetPreviewMapPosition(float &x, float &y, float mapx, float mapy, float sizex, float sizey, float zoom, float center_x, float center_y, bool bRound);
 	int GetSector(int nSectorsX, int nSectorsY, float x, float y);
 	void DrawMapPreview(float mapx, float mapy, float sizex, float sizey, float zoom, float center_x, float center_y, float alpha, struct PreviewMapParams *pParams=NULL);
-  void DrawRadar(float x, float y, float w, float h, float fRange, INT_PTR *pRadarTextures, _SmartScriptObject *pEntities, char *pRadarObjective);
+  void DrawRadar(float x, float y, float w, float h, float fRange, INT_PTR *pRadarTextures, _SmartScriptObject *pEntities, const char *pRadarObjective);
 
 	// Demo recording stuff ------------------------------------------------
 

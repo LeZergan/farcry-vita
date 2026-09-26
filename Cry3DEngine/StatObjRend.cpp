@@ -142,6 +142,18 @@ void CStatObj::Render(const SRendParams & rParams, const Vec3& t, int nLodLevel)
 {
   IRenderer * pRend = GetRenderer();
 
+#if defined(__vita__) || defined(LINUX)
+	/* Objects/Editor contains trigger letters, collision sheets, AI cover
+	   markers and test-map warning cards.  Their models are useful to the
+	   editor and sometimes to physics/AI, but none is retail world geometry.
+	   The desktop editor flag/shader path keeps them off-screen; enforce the
+	   same boundary explicitly in the compact renderer. */
+	if (!m_bEditorMode &&
+		(!strnicmp(m_szFileName, "Objects\\Editor\\", 15) ||
+		 !strnicmp(m_szFileName, "Objects/Editor/", 15)))
+		return;
+#endif
+
 	m_nLastRendFrameId = GetFrameID();
   
 ////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -740,7 +740,15 @@ void CPlayer::UpdateDead( SPlayerUpdateContext &ctx )
 
 	if (m_bFirstPerson)
 	{
+	#if defined(__vita__)
+		/* The compact Vita renderer only reaches the first-person weapon through
+		   this entity's container OnDraw.  Removing the entity from every sector
+		   therefore removes the callback as well; the desktop near-object path
+		   that made the old unregister trick work is not present here. */
+		m_pEntity->SetRegisterInSectors(true);
+	#else
 		m_pEntity->SetRegisterInSectors(false);
+	#endif
 		UpdateFirstPersonView();
 	}
 	else
@@ -1165,7 +1173,13 @@ m_AreaUser.SetEntity( GetEntity());
 #endif
 		if (m_bFirstPerson)
 		{
+		#if defined(__vita__)
+			/* Keep the container render callback alive on Vita.  Slot 0 remains
+			   hidden and slot 1 is marked DRAW_NEAR by UpdateFirstPersonView. */
+			m_pEntity->SetRegisterInSectors(true);
+		#else
 			m_pEntity->SetRegisterInSectors(false);
+		#endif
 			UpdateFirstPersonView();
 		}
 		else
@@ -5165,6 +5179,11 @@ void CPlayer::OnDraw(const SRendParams & _RendParams)
 	// if nRecursionLevel is not 0 - use only 3tp person view ( for reflections )
 	int nRecursionLevel = (int)m_pGame->GetSystem()->GetIRenderer()->EF_Query(EFQ_RecurseLevel) - 1;
 
+	/* The temporary Vita first-person gate trace used to live here.  It changed
+	   at every nested render bracket and LogToFile flushes to storage, producing
+	   thousands of synchronous writes in ordinary gameplay.  Hardware logs have
+	   already proved the first-person path; keep the shipping draw gate clean. */
+
 	// draw first person weapon
 	if(m_bFirstPerson && !nRecursionLevel && m_stats.drawfpweapon	&& m_nSelectedWeaponID != -1)
 	{
@@ -6358,7 +6377,11 @@ void CPlayer::VitaEnsureFirstPerson(bool bDriveCamera)
 
 	if (bDriveCamera)
 	{
-		m_pEntity->SetRegisterInSectors(false);
+		/* Unlike the desktop deferred path, Vita has no separate unregistered
+		   near-object submission list.  Leave the player entity registered so its
+		   container OnDraw can submit the first-person weapon; the body character
+		   is still hidden independently above. */
+		m_pEntity->SetRegisterInSectors(true);
 		UpdateFirstPersonView();
 	}
 }

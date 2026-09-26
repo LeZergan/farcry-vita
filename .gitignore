@@ -30,8 +30,26 @@
 /engine_port/vita_kit/*.vpk
 /engine_port/vita_kit/eboot.bin
 
-# Vendored LGPL Bink decoder -- it carries its own .git, so staging it here
-# would create a gitlink with no submodule URL behind it.  Left out rather than
-# stripping someone else's repository; register it as a real submodule if this
-# needs to travel with the tree.
-/third_party/libbinkdec/
+# Vendored decoder source is tracked as ordinary files. Its independent local
+# checkout metadata and generated outputs remain private to this workspace.
+/third_party/libbinkdec/.git/
+/third_party/libbinkdec/build*/
+
+# Isolated emulator, private game-data copy, and bounded run evidence.
+/engine_port/.vita3k-lab/
+/engine_port/tools/__pycache__/
+/engine_port/tests/__pycache__/
+
+# Separate repositories and publishing checkout; never stage as gitlinks.
+/.publish-source/
+/codexify/
+/.claude/
+
+# Generated build profiles and device captures remain local.
+/engine_port/build_*/
+/engine_port/device_*
+/engine_port/vita3k_Log*.txt
+/engine_port/vita_kit/eboot*.bin
+/engine_port/vita_kit/*.a
+/engine_port/vita_kit/*.build.json
+__pycache__/

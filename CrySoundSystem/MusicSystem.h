@@ -287,5 +287,13 @@ private:
 	CRITICAL_SECTION *m_pCS;
 public:
 	CSmartCriticalSection(CRITICAL_SECTION &CS) { m_pCS=&CS; EnterCriticalSection(m_pCS); }
-	~CSmartCriticalSection() { LeaveCriticalSection(m_pCS); }
+	/* Vita's music decoder runs on the audio core and can own this recursive
+	   mutex while filling its ring.  A game-frame control update is allowed to
+	   skip instead of stalling core 0 behind that decode. */
+	CSmartCriticalSection(CRITICAL_SECTION &CS, bool bTryOnly)
+	{
+		m_pCS = (!bTryOnly || TryEnterCriticalSection(&CS)) ? &CS : NULL;
+	}
+	bool IsLocked() const { return m_pCS != NULL; }
+	~CSmartCriticalSection() { if (m_pCS) LeaveCriticalSection(m_pCS); }
 };

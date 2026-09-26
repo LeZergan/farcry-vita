@@ -435,10 +435,13 @@ void CSound::Play(float fRatio, bool bForceActiveState, bool bSetRatio)
 							if (bCanPlay)
 							{
 								m_nChannel=CS_PlaySoundEx(CS_FREE, m_pSound->GetSample(), NULL, true);//,m_pSSys->GetDSPUnitFilter(),FALSE);
-								m_PlayingChannels++;
-								m_fChannelPlayTime = currTime;
-								m_fSoundLengthSec = GetLengthMs()/1000.0f;
-								bAllocatedChannel = true;
+								if (m_nChannel >= 0)
+								{
+									m_PlayingChannels++;
+									m_fChannelPlayTime = currTime;
+									m_fSoundLengthSec = GetLengthMs()/1000.0f;
+									bAllocatedChannel = true;
+								}
 							}
 							bStarted=true;
 						}
@@ -454,11 +457,14 @@ void CSound::Play(float fRatio, bool bForceActiveState, bool bSetRatio)
 						{
 							if (bCanPlay)
 							{
-								m_nChannel=CS_PlaySoundEx(CS_FREE, m_pSound->GetSample(), NULL, true);//,m_pSSys->GetDSPUnitFilter(),FALSE);													
-								m_PlayingChannels++;
-								m_fChannelPlayTime = currTime;
-								m_fSoundLengthSec = GetLengthMs()/1000.0f;
-								bAllocatedChannel = true;
+								m_nChannel=CS_PlaySoundEx(CS_FREE, m_pSound->GetSample(), NULL, true);//,m_pSSys->GetDSPUnitFilter(),FALSE);
+								if (m_nChannel >= 0)
+								{
+									m_PlayingChannels++;
+									m_fChannelPlayTime = currTime;
+									m_fSoundLengthSec = GetLengthMs()/1000.0f;
+									bAllocatedChannel = true;
+								}
 							}
 							bStarted=true;
 						}
@@ -539,7 +545,10 @@ void CSound::Play(float fRatio, bool bForceActiveState, bool bSetRatio)
 //////////////////////////////////////////////////////////////////////////
 void CSound::FreeChannel()
 {
-	if (!m_bPlaying || m_nChannel <= 0)
+	/* Channel zero is valid.  Treating it as "no channel" leaked the first
+	   voice forever; after enough scene changes that forced voice stealing and
+	   could cut dialogue halfway through a cinematic. */
+	if (!m_bPlaying || m_nChannel < 0)
 		return;
 	m_nPlayingVolume = -1;
 	if (m_pSound->Loaded())

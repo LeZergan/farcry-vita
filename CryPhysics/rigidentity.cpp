@@ -32,7 +32,17 @@ CRigidEntity::CRigidEntity(CPhysicalWorld *pWorld) : CPhysicalEntity(pWorld)
 		m_gravity = pWorld->m_vars.gravity;
 	else m_gravity.Set(0,0,-9.81f);
 	m_gravityFreefall = m_gravity;
+	/* The desktop default advances every active rigid body at 100 Hz.  Device
+	   profiling shows the Vita consequently running four complete collision and
+	   solver passes for every 40 ms game frame, spending 6-14 ms on just seven
+	   active bodies.  A 60 Hz rigid-body step is still twice the target display
+	   rate and the existing swept collision path below protects fast/small
+	   bodies, while reducing the normal frame to two or three solver passes. */
+#if defined(__vita__)
+	m_maxAllowedStep = 1.0f / 60.0f;
+#else
 	m_maxAllowedStep = 0.01f;
+#endif
 	m_Pext[0].zero(); m_Lext[0].zero();
 	m_Pext[1].zero(); m_Lext[1].zero();
 	int i;

@@ -829,8 +829,18 @@ void CEntity::PreloadInstanceResources(Vec3d vPrevPortalPos, float fPrevPortalDi
 float CEntity::GetMaxViewDist()
 {
 	I3DEngine * p3DEngine = m_pISystem->GetI3DEngine();
-	return max(p3DEngine->GetObjectsMinViewDist(),
+	float fDistance = max(p3DEngine->GetObjectsMinViewDist(),
 		GetRenderRadius()*p3DEngine->GetObjectsViewDistRatio()*GetViewDistRatioNormilized());
+#if defined(__vita__) || defined(LINUX)
+	/* The global object distance is deliberately conservative for thousands of
+	   jungle props.  Characters are few, cheap to skin in device traces, and
+	   gameplay-critical, so keep them visible farther without paying that cost
+	   for every static object. */
+	for (int i = 0; i < MAX_ANIMATED_MODELS; ++i)
+		if (m_pCryCharInstance[i])
+			return fDistance * 1.5f;
+#endif
+	return fDistance;
 }
 
 void CEntity::SetShaderFloat(const char *Name, float Val)

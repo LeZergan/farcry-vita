@@ -453,11 +453,27 @@ void	XmlParserImp::onRawData( const char* data )
 
 XmlNodeRef XmlParserImp::parse( const char *buffer,size_t bufLen,XmlString &errorString )
 {
+	if (!buffer && bufLen != 0)
+	{
+		errorString = "XML parse failed: null input buffer";
+		return XmlNodeRef();
+	}
+
 	XML_Memory_Handling_Suite memHandler;
 	memHandler.malloc_fcn = CryModuleMalloc;
 	memHandler.realloc_fcn = CryModuleRealloc;
 	memHandler.free_fcn = CryModuleFree;
 	m_parser = XML_ParserCreate_MM(NULL,&memHandler,NULL);
+	if (!m_parser)
+	{
+		/* Expat allocation failure is recoverable.  The old path immediately
+		   passed NULL to XML_SetUserData and crashed precisely when the Vita was
+		   already under memory pressure during a level load. */
+		errorString = "XML parse failed: parser allocation failed";
+		m_root = 0;
+		nodeStack.clear();
+		return XmlNodeRef();
+	}
 
   XML_SetUserData( m_parser, this );
   XML_SetElementHandler( m_parser, startElement,endElement );
@@ -508,9 +524,20 @@ XmlNodeRef XmlParser::parse( const char *fileName )
 		pPak->FSeek( file,0,SEEK_END );
 		int fileSize = pPak->FTell(file);
 		pPak->FSeek( file,0,SEEK_SET );
+		if (fileSize <= 0)
+		{
+			pPak->FClose(file);
+			m_errorString = fileSize < 0 ? "XML read failed" : "XML file is empty";
+			return XmlNodeRef();
+		}
 		buf.resize( fileSize );
-		pPak->FRead( &(buf[0]),fileSize,1,file );
+		const size_t readCount = pPak->FRead( &(buf[0]),fileSize,1,file );
 		pPak->FClose(file);
+		if (readCount != 1)
+		{
+			m_errorString = "XML read was incomplete";
+			return XmlNodeRef();
+		}
 		return xml.parse( &buf[0],buf.size(),m_errorString );
 	} else {
 		return XmlNodeRef();
@@ -521,6 +548,11 @@ XmlNodeRef XmlParser::parse( const char *fileName )
 XmlNodeRef XmlParser::parseBuffer( const char *buffer )
 {
 	m_errorString = "";
+	if (!buffer)
+	{
+		m_errorString = "XML parse failed: null input buffer";
+		return XmlNodeRef();
+	}
 	XmlParserImp xml;
 	return xml.parse( buffer,strlen(buffer),m_errorString );
 };

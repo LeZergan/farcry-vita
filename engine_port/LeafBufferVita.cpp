@@ -93,6 +93,22 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 {
 	if (!gcpVitaRenderer || !m_pVertexBuffer)
 		return;
+	/* VolFogTopCircle is a shader-generated translucent volume cap.  Drawing
+	   its bare geometry through the white fallback produces the opaque white
+	   disc/sheet reported in gameplay.  Distance fog remains active; omit only
+	   this unsupported auxiliary pass until it has a real fixed-function
+	   equivalent. */
+	if (m_sSource && !stricmp(m_sSource, "VolFogTopCircle"))
+	{
+		static bool s_bReportedFogCapSkip = false;
+		if (!s_bReportedFogCapSkip && iLog)
+		{
+			s_bReportedFogCapSkip = true;
+			iLog->LogToFile("\001[VITA][FOG] suppressed shader-only volume top cap");
+		}
+		return;
+	}
+	#if defined(VITA_PERF_TELEMETRY)
 	{
 		static std::map<std::string, bool> reportedSources;
 		/* Build the key only while the report can still fire.  This runs on
@@ -113,6 +129,79 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 		}
 		}
 	}
+	#endif
+
+	/* The terrain source format has no UV field because the desktop shaders
+	   derive coordinates from position.  Supplying a separate generated client
+	   array made vitaGL unbind the resident vertex VBO for every terrain draw.
+	   Upgrade each sector once to the otherwise identical format with TEX2F,
+	   then only touch those two floats when the engine switches between the
+	   near sector texture and the far cover-map mapping. */
+	if (m_sSource && !stricmp(m_sSource, "TerrainSector") && m_pMats &&
+		m_pMats->Count() > 0 && (*m_pMats)[0].pRE &&
+		(*m_pMats)[0].pRE->m_CustomData && m_pVertexBuffer)
+	{
+		const float *pTexGen = (const float *)(*m_pMats)[0].pRE->m_CustomData;
+		if (m_pVertexBuffer->m_vertexformat == VERTEX_FORMAT_P3F_N_COL4UB_COL4UB)
+		{
+			const int nVerts = m_pVertexBuffer->m_NumVerts;
+			const struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB *pSrc =
+				(const struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB *)m_pVertexBuffer->m_VS[VSF_GENERAL].m_VData;
+			std::vector<struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F> baked;
+			baked.resize((size_t)nVerts);
+			for (int n = 0; pSrc && n < nVerts; ++n)
+			{
+				baked[n].xyz = pSrc[n].xyz;
+				baked[n].normal = pSrc[n].normal;
+				baked[n].color = pSrc[n].color;
+				baked[n].seccolor = pSrc[n].seccolor;
+				baked[n].st[0] = pSrc[n].xyz.y * pTexGen[2] + pTexGen[0];
+				baked[n].st[1] = pSrc[n].xyz.x * pTexGen[2] + pTexGen[1];
+			}
+
+			CVertexBuffer *pBakedBuffer = (pSrc && nVerts > 0) ?
+				gcpVitaRenderer->CreateBuffer(nVerts,
+					VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F, m_sSource, false) : NULL;
+			if (pBakedBuffer)
+			{
+				gcpVitaRenderer->UpdateBuffer(pBakedBuffer, &baked[0], nVerts, true, 0, VSF_GENERAL);
+				CVertexBuffer *pOldVideo = m_pVertexBuffer;
+				CVertexBuffer *pOldSystem = m_pSecVertBuffer;
+				m_pVertexBuffer = pBakedBuffer;
+				m_pSecVertBuffer = pBakedBuffer;
+				m_nVertexFormat = VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F;
+				gcpVitaRenderer->ReleaseBuffer(pOldVideo);
+				if (pOldSystem && pOldSystem != pOldVideo)
+					gcpVitaRenderer->ReleaseBuffer(pOldSystem);
+				m_fMinU = pTexGen[0];
+				m_fMinV = pTexGen[1];
+				m_fMaxU = pTexGen[2];
+				static bool s_bReportedBakedTerrainUV = false;
+				if (!s_bReportedBakedTerrainUV && iLog)
+				{
+					s_bReportedBakedTerrainUV = true;
+					iLog->LogToFile("\001[VITA][PERF] terrain UVs baked into resident vertex buffers");
+				}
+			}
+		}
+		else if (m_pVertexBuffer->m_vertexformat == VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F &&
+			(m_fMinU != pTexGen[0] || m_fMinV != pTexGen[1] || m_fMaxU != pTexGen[2]))
+		{
+			struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F *pVerts =
+				(struct_VERTEX_FORMAT_P3F_N_COL4UB_COL4UB_TEX2F *)m_pVertexBuffer->m_VS[VSF_GENERAL].m_VData;
+			for (int n = 0; pVerts && n < m_pVertexBuffer->m_NumVerts; ++n)
+			{
+				pVerts[n].st[0] = pVerts[n].xyz.y * pTexGen[2] + pTexGen[0];
+				pVerts[n].st[1] = pVerts[n].xyz.x * pTexGen[2] + pTexGen[1];
+			}
+			m_pVertexBuffer->m_bGLDirty = true;
+			m_fMinU = pTexGen[0];
+			m_fMinV = pTexGen[1];
+			m_fMaxU = pTexGen[2];
+		}
+	}
+
+	const bool bLightMapBound = gcpVitaRenderer->BeginVitaLightMap(pObj, m_pVertexBuffer);
 
 	/* Match Crytek's EF_SetObjectTransform contract: m_Matrix is only valid
 	   when one of FOB_TRANS_* is set. CCObject::Init intentionally does not
@@ -134,9 +223,73 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 		   chunk rather than just the first. */
 		extern const float *g_pVitaTerrainTexGen;
 		g_pVitaTerrainTexGen = (*m_pMats)[0].pRE ? (*m_pMats)[0].pRE->m_CustomData : NULL;
+		extern int g_nVitaTerrainDetailTexture;
+		extern float g_arrVitaTerrainDetailTransform[4];
+		g_nVitaTerrainDetailTexture = 0;
+		g_arrVitaTerrainDetailTransform[0] = 12.0f;
+		g_arrVitaTerrainDetailTransform[1] = 12.0f;
+		g_arrVitaTerrainDetailTransform[2] = 0.0f;
+		g_arrVitaTerrainDetailTransform[3] = 0.0f;
+		if (m_sSource && !stricmp(m_sSource, "TerrainSector") && (*m_pMats)[0].pRE)
+		{
+			/* Prefer a Z-projected authored layer: its UVs derive from world X/Y
+			   and can therefore be reconstructed exactly from the sector base UVs.
+			   Side-projected cliff layers need world Z, which is not present in the
+			   fixed-function UV stream. */
+			const float *pTerrainData = (const float *)(*m_pMats)[0].pRE->m_CustomData;
+			int nChosenLayer = 0;
+			if (pTerrainData)
+			{
+				for (int nLayer = 1; nLayer < MAX_CUSTOM_TEX_BINDS_NUM; ++nLayer)
+				{
+					const int nDetail = nLayer - 1;
+					const float *pProjection = pTerrainData + 4 + nDetail * 8;
+					if ((*m_pMats)[0].pRE->m_CustomTexBind[nLayer] > 0 &&
+						pProjection[1] != 0.0f && pProjection[4] != 0.0f)
+					{
+						nChosenLayer = nLayer;
+						break;
+					}
+				}
+			}
+			if (!nChosenLayer)
+				for (int nLayer = 1; nLayer < MAX_CUSTOM_TEX_BINDS_NUM; ++nLayer)
+					if ((*m_pMats)[0].pRE->m_CustomTexBind[nLayer] > 0)
+					{
+						nChosenLayer = nLayer;
+						break;
+					}
+			if (nChosenLayer)
+			{
+				g_nVitaTerrainDetailTexture = (*m_pMats)[0].pRE->m_CustomTexBind[nChosenLayer];
+				if (pTerrainData && pTerrainData[2] != 0.0f)
+				{
+					const float *pProjection = pTerrainData + 4 + (nChosenLayer - 1) * 8;
+					if (pProjection[1] != 0.0f && pProjection[4] != 0.0f)
+					{
+						/* baseU = worldY*baseScale+biasU and baseV =
+						   worldX*baseScale+biasV.  Convert those back into
+						   the exact authored Z-projection without another UV stream. */
+						g_arrVitaTerrainDetailTransform[0] = pProjection[1] / pTerrainData[2];
+						g_arrVitaTerrainDetailTransform[1] = pProjection[4] / pTerrainData[2];
+						g_arrVitaTerrainDetailTransform[2] = -pTerrainData[0] * g_arrVitaTerrainDetailTransform[0];
+						g_arrVitaTerrainDetailTransform[3] = -pTerrainData[1] * g_arrVitaTerrainDetailTransform[1];
+					}
+				}
+			}
+		}
 		struct SVitaTexGenScope
 		{
-			~SVitaTexGenScope() { extern const float *g_pVitaTerrainTexGen; g_pVitaTerrainTexGen = NULL; }
+			~SVitaTexGenScope()
+			{
+				extern const float *g_pVitaTerrainTexGen;
+				extern int g_nVitaTerrainDetailTexture;
+				extern float g_arrVitaTerrainDetailTransform[4];
+				g_pVitaTerrainTexGen = NULL;
+				g_nVitaTerrainDetailTexture = 0;
+				g_arrVitaTerrainDetailTransform[0] = g_arrVitaTerrainDetailTransform[1] = 12.0f;
+				g_arrVitaTerrainDetailTransform[2] = g_arrVitaTerrainDetailTransform[3] = 0.0f;
+			}
 		} texGenScope;
 
 		/* Accumulated run of adjacent chunks sharing state/cull/texture; see the
@@ -172,6 +325,29 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 		const bool isOutdoorWater = m_sSource && strnicmp(m_sSource, "OutdoorWater", 12) == 0;
 		const bool isWaterVolume = m_sSource && strnicmp(m_sSource, "WaterVolume", 11) == 0;
 		const bool isWaterSurface = isOutdoorWater || isWaterVolume;
+		/* Indoor water arrives opaque white because its colour was authored in a
+		   shader pass.  This is static geometry, so write the low-spec fallback
+		   colour once per buffer instead of walking every vertex once per material
+		   chunk on every frame. */
+		if (isWaterVolume && m_fMaxV != -9876.0f)
+		{
+			const SBufInfoTable &format = gBufInfoTable[m_pVertexBuffer->m_vertexformat];
+			if (format.OffsColor > 0)
+			{
+				byte *vertices = (byte *)m_pVertexBuffer->m_VS[VSF_GENERAL].m_VData;
+				const int stride = m_VertexSize[m_pVertexBuffer->m_vertexformat];
+				for (int vertex = 0; vertices && vertex < m_SecVertCount; ++vertex)
+				{
+					byte *color = vertices + vertex * stride + format.OffsColor;
+					color[0] = 112;
+					color[1] = 158;
+					color[2] = 184;
+					color[3] = 96;
+				}
+				m_pVertexBuffer->m_bGLDirty = true;
+			}
+			m_fMaxV = -9876.0f;
+		}
 
 		for (int i = 0; i < m_pMats->Count(); i++)
 		{
@@ -183,23 +359,7 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 			   no CSL multipass interpreter, so preserve that authored fallback in
 			   the vertex stream instead of drawing the shaderless volume as opaque
 			   white (its source vertices intentionally arrive as 0xffffffff). */
-			if (isWaterVolume)
-			{
-				const SBufInfoTable &format = gBufInfoTable[m_pVertexBuffer->m_vertexformat];
-				if (format.OffsColor > 0)
-				{
-					byte *vertices = (byte *)m_pVertexBuffer->m_VS[VSF_GENERAL].m_VData;
-					const int stride = m_VertexSize[m_pVertexBuffer->m_vertexformat];
-					for (int vertex = 0; vertices && vertex < m_SecVertCount; ++vertex)
-					{
-						byte *color = vertices + vertex * stride + format.OffsColor;
-						color[0] = 112;
-						color[1] = 158;
-						color[2] = 184;
-						color[3] = 96;
-					}
-				}
-			}
+			#if defined(VITA_PERF_TELEMETRY)
 			if (isWaterSurface)
 			{
 				static std::map<std::string, bool> reportedWaterBuffers;
@@ -221,7 +381,7 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 						}
 					}
 					if (iLog)
-						iLog->LogToFile("[VITA][WATER] source=%s fmt=%d verts=%d inds=%d chunks=%d clientTex=%d alpha=%d..%d",
+						iLog->LogToFile("\001[VITA][WATER] source=%s fmt=%d verts=%d inds=%d chunks=%d clientTex=%d alpha=%d..%d",
 							waterKey.c_str(), m_pVertexBuffer->m_vertexformat, m_SecVertCount,
 							m_NumIndices, m_pMats->Count(), m_nClientTextureBindID, minAlpha, maxAlpha);
 					sceClibPrintf("[VITAWATER] source=%s fmt=%d verts=%d inds=%d chunks=%d clientTex=%d alpha=%d..%d\n",
@@ -230,6 +390,7 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 					fflush(stdout);
 				}
 			}
+			#endif
 
 			/* Load and bind the material's real diffuse asset on first draw.
 			   Crytek's desktop shader-template compiler normally performs this
@@ -241,33 +402,63 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 				/* Crytek's collision-only proxy material. It carries no texture,
 				   so on this port it reached the white fallback and painted solid
 				   white boxes over the world instead of not drawing at all. */
-				if (VitaMaterial::IsNoDraw(vitaShaderName))
+				if (VitaMaterial::IsNoDrawMaterial(mi))
 					continue;
 			int renderState = isWaterSurface
 				? (GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA)
 				: GS_DEPTHWRITE;
-			int nChunkCull = R_CULL_BACK;
+			const bool bDynamicMesh = m_pVertexBuffer && m_pVertexBuffer->m_bDynamic != 0;
+			int nChunkCull = (isWaterSurface || bDynamicMesh) ? R_CULL_NONE : R_CULL_BACK;
 				/* Cut-out foliage keeps its transparency in the texture with
 				   m_AlphaRef left at 0, so only the shader template says it needs
 				   an alpha test. Without one, every leaf and frond draws as a
 				   solid rectangle. See VitaMaterial::NeedsAlphaTest. */
 				if (VitaMaterial::NeedsAlphaTest(vitaShaderName))
 					renderState |= GS_ALPHATEST_GEQUAL128;
+			const bool bNameShadow = VitaMaterial::IsModulativeShadow(vitaShaderName);
+			const bool bNameAdditive = VitaMaterial::NeedsAdditiveBlend(vitaShaderName);
+			const bool bNameAlpha = VitaMaterial::NeedsAlphaBlend(vitaShaderName);
 			if (resources)
 			{
 				if (resources->m_AlphaRef >= 0.5f)
 					renderState |= GS_ALPHATEST_GEQUAL128;
 				else if (resources->m_AlphaRef > 0.0f)
 					renderState |= GS_ALPHATEST_GEQUAL64;
-				if (resources->m_Opacity < 0.999f)
+				const bool bAdditive =
+					(resources->m_ResFlags & (MTLFLAG_ADDITIVE | MTLFLAG_ADDITIVEDECAL)) != 0 ||
+					bNameAdditive;
+				if (bNameShadow)
+				{
+					renderState &= ~(GS_DEPTHWRITE | GS_ALPHATEST_MASK);
+					renderState |= GS_BLSRC_ZERO | GS_BLDST_SRCCOL;
+				}
+				else if (bAdditive)
+				{
+					renderState &= ~(GS_DEPTHWRITE | GS_ALPHATEST_MASK);
+					renderState |= GS_BLSRC_ONE | GS_BLDST_ONE;
+				}
+				else if (resources->m_Opacity < 0.999f || bNameAlpha)
 				{
 					renderState &= ~GS_DEPTHWRITE;
-					if (resources->m_ResFlags & MTLFLAG_ADDITIVE)
-						renderState |= GS_BLSRC_ONE | GS_BLDST_ONE;
-					else
-						renderState |= GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA;
+					renderState |= GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA;
 				}
-				nChunkCull = (resources->m_ResFlags & MTLFLAG_2SIDED) ? R_CULL_NONE : R_CULL_BACK;
+				if (bDynamicMesh || isWaterSurface || (resources->m_ResFlags & MTLFLAG_2SIDED))
+					nChunkCull = R_CULL_NONE;
+			}
+			else if (bNameShadow)
+			{
+				renderState &= ~(GS_DEPTHWRITE | GS_ALPHATEST_MASK);
+				renderState |= GS_BLSRC_ZERO | GS_BLDST_SRCCOL;
+			}
+			else if (bNameAdditive)
+			{
+				renderState &= ~(GS_DEPTHWRITE | GS_ALPHATEST_MASK);
+				renderState |= GS_BLSRC_ONE | GS_BLDST_ONE;
+			}
+			else if (bNameAlpha)
+			{
+				renderState &= ~GS_DEPTHWRITE;
+				renderState |= GS_BLSRC_SRCALPHA | GS_BLDST_ONEMINUSSRCALPHA;
 			}
 			SEfResTexture *diffuse = resources ? resources->m_Textures[EFTT_DIFFUSE] : NULL;
 			if (diffuse && !diffuse->m_TU.m_ITexPic && !diffuse->m_Name.empty())
@@ -304,6 +495,26 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 							diffuse->m_TU.GetTexFlags(), diffuse->m_TU.GetTexFlags2(),
 							eTT_Base, 1.0f, 1.0f, -1, -1);
 					}
+					/* Some retail materials contain a stale rooted folder but retain
+					   the correct material texture path.  Carrier's crate2 is the
+					   concrete device-log case: the authored name omits "boxes/",
+					   while the asset exists beside the material.  After the authored
+					   path has failed, resolve its basename against that authoritative
+					   folder just as EF_AddEf already does. */
+					if (!loaded)
+					{
+						const size_t nSlash = textureName.find_last_of("/\\");
+						if (nSlash != std::string::npos)
+						{
+							std::string fullName = resources->m_TexturePath.c_str();
+							if (!fullName.empty() && fullName[fullName.size()-1] != '/' && fullName[fullName.size()-1] != '\\')
+								fullName += '/';
+							fullName += textureName.substr(nSlash + 1);
+							loaded = gcpVitaRenderer->EF_LoadTexture(fullName.c_str(),
+								diffuse->m_TU.GetTexFlags(), diffuse->m_TU.GetTexFlags2(),
+								eTT_Base, 1.0f, 1.0f, -1, -1);
+						}
+					}
 				}
 				diffuse->m_TU.m_ITexPic = loaded;
 			}
@@ -313,18 +524,11 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 			int nChunkTexture = 0;
 			if (diffuse && diffuse->m_TU.m_ITexPic)
 				nChunkTexture = diffuse->m_TU.m_ITexPic->GetTextureID();
-			/* Outdoor ocean as well as indoor volumes: the ocean material carries no
-				   diffuse of its own (retail drives it from the TerrainWater /
-				   TerrainWater_OnlySky shaders, which this port does not have), so it
-				   used to reach the white fallback below -- and because the ocean plane
-				   runs to the horizon, that white is what filled the sky on any view out
-				   to sea. Bind the game's real caustic water texture instead; the
-				   per-vertex water colour still modulates it. */
-				/* Indoor water volumes only.  Binding this caustic texture on the
-				   outdoor ocean too was tried and made things worse -- that plane
-				   reaches the horizon, so it filled large parts of the view with
-				   the wrong surface instead of the sky behind it. */
-				else if (isWaterVolume)
+			/* TerrainWater normally supplies its animated maps through the desktop
+			   shader-template passes.  On Vita both ocean and indoor water now carry
+			   valid UVs, so use the retail low-spec caustic asset instead of the white
+			   fallback that also disables the vertex colour/alpha array. */
+			else if (isWaterSurface)
 			{
 				static int s_waterTexture = 0;
 				if (!s_waterTexture)
@@ -341,6 +545,7 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 				nChunkTexture = m_nClientTextureBindID;
 			else
 			{
+				#if defined(VITA_PERF_TELEMETRY)
 				static std::map<std::string, bool> reportedWhiteMaterials;
 				std::string key = m_sSource ? m_sSource : "<unknown-buffer>";
 				key += "|";
@@ -359,7 +564,9 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 							diffuse ? diffuse->m_Name.c_str() : "<null>",
 							resources ? resources->m_TexturePath.c_str() : "<null>");
 				}
+				#endif
 			}
+			#if defined(VITA_PERF_TELEMETRY)
 			if (isWaterSurface && i == 0)
 			{
 				static std::map<std::string, bool> reportedWaterMaterials;
@@ -378,6 +585,7 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 					fflush(stdout);
 				}
 			}
+			#endif
 			/* Batch adjacent chunks.  A terrain sector carries ~34 material
 			   chunks and the ocean ~32, each of which used to be its own state
 			   change plus draw call.  Where consecutive chunks agree on state,
@@ -420,6 +628,8 @@ void CLeafBuffer::AddRenderElements(CCObject *pObj, int DLightMask, int nTemplat
 	}
 	if (hasObjectTransform)
 		gcpVitaRenderer->PopMatrix();
+	if (bLightMapBound)
+		gcpVitaRenderer->EndVitaLightMap();
 }
 
 /* Vita: every other CLeafBuffer virtual -- honest no-ops/safe defaults, the
@@ -677,6 +887,23 @@ void CLeafBuffer::CreateBuffer(CIndexedMesh *pTriData, bool bStripifyAndShareVer
 	// See CLeafBuffer::m_nLMCornerCount -- lightmap UV resampling data.
 	std::vector<int> arrLMCornerOfVertex;
 	int nCornerCounter = 0;
+	/* evs_NoSharing is required by baked lightmaps: the lightmap UV stream has
+	   one entry per triangle corner, including separate UVs on geometry seams.
+	   Welding those corners and retaining only the first UV produces the visible
+	   smears/seams.  Preserve them whenever they fit in Vita's 16-bit index
+	   range; only oversized merged geometry uses the compatibility fallback. */
+	const bool bPreserveUnsharedCorners = !bStripifyAndShareVerts &&
+		pTriData->m_nFaceCount <= 21845;
+	if (!bStripifyAndShareVerts && !bPreserveUnsharedCorners)
+	{
+		static bool s_bReportedOversizedUnsharedMesh = false;
+		if (!s_bReportedOversizedUnsharedMesh && iLog)
+		{
+			s_bReportedOversizedUnsharedMesh = true;
+			iLog->LogToFile("\001[VITA][LIGHTMAP] oversized no-sharing mesh (%d faces); welding 16-bit fallback",
+				pTriData->m_nFaceCount);
+		}
+	}
 	vertices.reserve(pTriData->m_nFaceCount * 2);
 	indices.reserve(pTriData->m_nFaceCount * 3);
 	m_nVertexFormat = VERTEX_FORMAT_P3F_N_COL4UB_TEX2F;
@@ -690,7 +917,8 @@ void CLeafBuffer::CreateBuffer(CIndexedMesh *pTriData, bool bStripifyAndShareVer
 		int maxVertex = -1;
 
 		IShader *templateShader = mi.shaderItem.m_pShader ? mi.shaderItem.m_pShader->GetTemplate(-1) : NULL;
-		const bool noDraw = templateShader && (templateShader->GetFlags3() & EF3_NODRAW);
+		const bool noDraw = VitaMaterial::IsNoDrawMaterial(mi) ||
+			(templateShader && (templateShader->GetFlags3() & EF3_NODRAW));
 		for (int faceIndex = 0; faceIndex < pTriData->m_nFaceCount; ++faceIndex)
 		{
 			CObjFace &face = pTriData->m_pFaces[faceIndex];
@@ -712,13 +940,13 @@ void CLeafBuffer::CreateBuffer(CIndexedMesh *pTriData, bool bStripifyAndShareVer
 				unsigned nSlot = ((unsigned)keyV * 73856093u) ^ ((unsigned)keyN * 19349663u) ^
 					((unsigned)keyT * 83492791u) ^ ((unsigned)material * 2654435761u);
 				nSlot &= nHashMask;
-				while (vertexHash[nSlot].index >= 0 &&
+				while (!bPreserveUnsharedCorners && vertexHash[nSlot].index >= 0 &&
 					!(vertexHash[nSlot].v == keyV && vertexHash[nSlot].n == keyN &&
 					  vertexHash[nSlot].t == keyT && vertexHash[nSlot].material == material))
 					nSlot = (nSlot + 1) & nHashMask;
 
 				ushort index;
-				if (vertexHash[nSlot].index >= 0)
+				if (!bPreserveUnsharedCorners && vertexHash[nSlot].index >= 0)
 				{
 					index = (ushort)vertexHash[nSlot].index;
 				}
@@ -752,11 +980,14 @@ void CLeafBuffer::CreateBuffer(CIndexedMesh *pTriData, bool bStripifyAndShareVer
 					index = (ushort)vertices.size();
 					vertices.push_back(vertex);
 					arrLMCornerOfVertex.push_back(nSourceCorner);
-					vertexHash[nSlot].v = keyV;
-					vertexHash[nSlot].n = keyN;
-					vertexHash[nSlot].t = keyT;
-					vertexHash[nSlot].material = material;
-					vertexHash[nSlot].index = (int)index;
+					if (!bPreserveUnsharedCorners)
+					{
+						vertexHash[nSlot].v = keyV;
+						vertexHash[nSlot].n = keyN;
+						vertexHash[nSlot].t = keyT;
+						vertexHash[nSlot].material = material;
+						vertexHash[nSlot].index = (int)index;
+					}
 				}
 				indices.push_back(index);
 				minVertex = min(minVertex, (int)index);
@@ -856,8 +1087,11 @@ bool CLeafBuffer::CreateBuffer(struct VertexBufferSource *pSource)
 
 	std::vector<int> minVertex((size_t)m_pMats->Count(), 0x7fffffff);
 	std::vector<int> maxVertex((size_t)m_pMats->Count(), -1);
-	std::vector<int> firstIndex((size_t)m_pMats->Count(), 0x7fffffff);
-	std::vector<int> lastIndex((size_t)m_pMats->Count(), -1);
+	std::vector<Vec3> materialMin((size_t)m_pMats->Count(),
+		Vec3(1.0e20f, 1.0e20f, 1.0e20f));
+	std::vector<Vec3> materialMax((size_t)m_pMats->Count(),
+		Vec3(-1.0e20f, -1.0e20f, -1.0e20f));
+	std::vector< std::vector<ushort> > materialIndices((size_t)m_pMats->Count());
 	bool boxInitialized = false;
 
 	for (unsigned groupIndex = 0; groupIndex < pSource->numPrimGroups; ++groupIndex)
@@ -885,18 +1119,29 @@ bool CLeafBuffer::CreateBuffer(struct VertexBufferSource *pSource)
 			mi.pRE->m_Flags |= pSource->nREFlags;
 		}
 
-		firstIndex[group.nMaterial] = min(firstIndex[group.nMaterial], (int)group.nIndexBase);
-		lastIndex[group.nMaterial] = max(lastIndex[group.nMaterial], (int)end);
-		Vec3 localMin(1.0e20f, 1.0e20f, 1.0e20f);
-		Vec3 localMax(-1.0e20f, -1.0e20f, -1.0e20f);
+		/* A material may own several primitive groups, and those groups are not
+		   required to be adjacent in the source index stream.  Taking the minimum
+		   group start and maximum group end (the old code) swallowed every group
+		   belonging to other materials between them.  CryModelSubmesh then
+		   submitted that oversized range once per primitive group: the first-person
+		   weapon could redraw the same geometry dozens of times and shade some of
+		   it with the wrong material.
+
+		   Preserve every triangle exactly once by collecting each group's exact
+		   indices into its material bucket.  Below, the buckets are flattened into
+		   one contiguous range per CMatInfo, which is the layout AddRenderElements
+		   and its one-submit-per-material path actually require. */
+		std::vector<ushort> &grouped = materialIndices[group.nMaterial];
+		grouped.reserve(grouped.size() + (size_t)(end - group.nIndexBase));
 		for (unsigned index = group.nIndexBase; index < end; ++index)
 		{
 			unsigned vertexIndex = pSource->pIndices[index];
 			if (vertexIndex >= pSource->numVertices)
 				continue;
+			grouped.push_back((ushort)vertexIndex);
 			const Vec3 &position = pSource->pVertices[vertexIndex];
-			localMin.CheckMin(position);
-			localMax.CheckMax(position);
+			materialMin[group.nMaterial].CheckMin(position);
+			materialMax[group.nMaterial].CheckMax(position);
 			minVertex[group.nMaterial] = min(minVertex[group.nMaterial], (int)vertexIndex);
 			maxVertex[group.nMaterial] = max(maxVertex[group.nMaterial], (int)vertexIndex);
 			if (!boxInitialized)
@@ -910,22 +1155,23 @@ bool CLeafBuffer::CreateBuffer(struct VertexBufferSource *pSource)
 				m_vBoxMax.CheckMax(position);
 			}
 		}
-		if (maxVertex[group.nMaterial] >= 0)
-		{
-			mi.m_vCenter = (localMin + localMax) * 0.5f;
-			mi.m_fRadius = (localMin - mi.m_vCenter).GetLength();
-		}
 	}
 
+	std::vector<ushort> drawIndices;
+	drawIndices.reserve((size_t)pSource->numIndices);
 	for (int material = 0; material < m_pMats->Count(); ++material)
 	{
 		CMatInfo &mi = (*m_pMats)[material];
-		if (lastIndex[material] > firstIndex[material] && maxVertex[material] >= minVertex[material])
+		const std::vector<ushort> &grouped = materialIndices[(size_t)material];
+		if (!grouped.empty() && maxVertex[material] >= minVertex[material])
 		{
-			mi.nFirstIndexId = firstIndex[material];
-			mi.nNumIndices = lastIndex[material] - firstIndex[material];
+			mi.nFirstIndexId = (int)drawIndices.size();
+			mi.nNumIndices = (int)grouped.size();
 			mi.nFirstVertId = minVertex[material];
 			mi.nNumVerts = maxVertex[material] - minVertex[material] + 1;
+			mi.m_vCenter = (materialMin[material] + materialMax[material]) * 0.5f;
+			mi.m_fRadius = (materialMax[material] - mi.m_vCenter).GetLength();
+			drawIndices.insert(drawIndices.end(), grouped.begin(), grouped.end());
 		}
 		else
 		{
@@ -949,8 +1195,43 @@ bool CLeafBuffer::CreateBuffer(struct VertexBufferSource *pSource)
 	gcpVitaRenderer->UpdateBuffer(m_pVertexBuffer, &vertices[0], (int)pSource->numVertices, true, 0, VSF_GENERAL);
 	m_pSecVertBuffer = m_pVertexBuffer;
 	m_SecVertCount = (int)pSource->numVertices;
-	gcpVitaRenderer->CreateIndexBuffer(&m_Indices, pSource->pIndices, (int)pSource->numIndices);
-	m_NumIndices = (int)pSource->numIndices;
+	if (drawIndices.empty())
+	{
+		/* Defensive old-CCG fallback.  The caller normally takes a separate path
+		   when there are no primitive groups, but retaining the source stream is
+		   safer than producing a valid vertex buffer with nothing drawable. */
+		drawIndices.assign(pSource->pIndices, pSource->pIndices + pSource->numIndices);
+		if (m_pMats->Count() > 0)
+		{
+			CMatInfo &mi = (*m_pMats)[0];
+			mi.nFirstIndexId = 0;
+			mi.nNumIndices = (int)drawIndices.size();
+			mi.nFirstVertId = 0;
+			mi.nNumVerts = (int)pSource->numVertices;
+		}
+	}
+	#if defined(VITA_PERF_TELEMETRY)
+	if (iLog)
+	{
+		unsigned nDrawMaterials = 0;
+		for (int nMaterial = 0; nMaterial < m_pMats->Count(); ++nMaterial)
+			if ((*m_pMats)[nMaterial].nNumIndices > 0)
+				++nDrawMaterials;
+		static unsigned s_nCharacterLayoutReports = 0;
+		if (s_nCharacterLayoutReports < 24 && pSource->numPrimGroups > nDrawMaterials)
+		{
+			++s_nCharacterLayoutReports;
+			iLog->LogToFile("\001[VITA][CHARBUF] source=%s primGroups=%u drawMaterials=%u "
+				"sourceIndices=%u drawIndices=%u verts=%u ringKB=%u",
+				m_sSource ? m_sSource : "<unnamed>", pSource->numPrimGroups,
+				nDrawMaterials, pSource->numIndices, (unsigned)drawIndices.size(),
+				pSource->numVertices,
+				(unsigned)(pSource->numVertices * sizeof(struct_VERTEX_FORMAT_P3F_COL4UB_TEX2F) * 5 / 1024));
+		}
+	}
+	#endif
+	gcpVitaRenderer->CreateIndexBuffer(&m_Indices, &drawIndices[0], (int)drawIndices.size());
+	m_NumIndices = (int)drawIndices.size();
 	return true;
 }
 int CLeafBuffer::GetAllocatedBytes(bool bVideoMem)

@@ -32,6 +32,12 @@ option(FARCRY_VITA_DEBUG_PHYSICALIZE "Trace CStatObj::Physicalize mesh registrat
 option(FARCRY_VITA_DEBUG_AUDIO "Trace the CrySound mixer's output level" OFF)
 # Periodically logs the outdoor/indoor clear colour and the sky render element.
 option(FARCRY_VITA_DEBUG_CLEARCOLOR "Trace C3DEngine::SetupClearColor" OFF)
+# Collects subsystem/draw/upload timing and writes it to the game log every
+# 120 frames.  Keep this opt-in: process-timer reads in the hot path and
+# periodic memory-card writes are useful for a profiling build but can create
+# the very frame-time spikes a release build is supposed to avoid.
+option(FARCRY_VITA_PERF_TELEMETRY "Enable periodic Vita performance telemetry" OFF)
+option(FARCRY_VITA3K_LAB "Use the isolated Vita3K lab startup workaround (not a hardware release)" OFF)
 # Internal render resolution as a percentage of the Vita's 960x544 panel; the
 # hardware scaler brings it back up.  100 is native, 75 and 66 are the useful
 # steps if the SGX543 turns out to be fill-rate bound on real hardware.
@@ -51,8 +57,8 @@ set(FARCRY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 # them, but only if it's visible before those headers are first parsed.
 set(FORCE_INCLUDE_FLAG "-include${CMAKE_CURRENT_SOURCE_DIR}/compat/CryCompat.h")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DLINUX -DLINUX32 -std=gnu++11 -fpermissive -Wno-narrowing -Wl,-q ${FORCE_INCLUDE_FLAG}")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DLINUX -DLINUX32 -Wl,-q")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DLINUX -DLINUX32 -mtune=cortex-a9 -std=gnu++11 -fpermissive -Wno-narrowing -Wl,-q ${FORCE_INCLUDE_FLAG}")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DLINUX -DLINUX32 -mtune=cortex-a9 -Wl,-q")
 
 include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}/compat
@@ -127,7 +133,7 @@ list(APPEND VITA_SOURCES ${LIBBINKDEC_SOURCES})
 # The decoder throws nothing and needs no unwinding; keeping its exception and
 # unwind tables out holds .ARM.exidx down, which vita-elf-create is sensitive to.
 set_source_files_properties(${LIBBINKDEC_SOURCES} PROPERTIES
-  COMPILE_OPTIONS "-fno-exceptions;-fno-unwind-tables;-fno-asynchronous-unwind-tables")
+  COMPILE_OPTIONS "-fno-exceptions;-fno-unwind-tables;-fno-asynchronous-unwind-tables;-marm;-ffast-math;-fomit-frame-pointer")
 
 # The retail executable loaded CryGame as a DLL on desktop.  Vita has no
 # useful DLL boundary here, so compile the original game module directly and
@@ -140,6 +146,14 @@ if(FARCRY_VITA_FULL_GAME)
 endif()
 
 add_executable(${PROJECT_NAME} ${VITA_SOURCES})
+
+if(FARCRY_VITA3K_LAB)
+  target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Vita3KLab.cpp")
+  target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--wrap=invoke_splashscreen")
+  set_property(SOURCE ${FARCRY_ROOT}/RenderDll/XRenderNULL/VitaRenderer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/VitaInput.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS "FARCRY_VITA3K_LAB=1")
+endif()
 
 # These retail PC middleware paths are not used by the in-process single-player
 # transport and have no Vita SDK.  Compiling them out also saves code and heap.
@@ -173,6 +187,19 @@ if(FARCRY_VITA_DEBUG_CLEARCOLOR)
     ${FARCRY_ROOT}/RenderDll/XRenderNULL/VitaRenderer.cpp
     PROPERTIES COMPILE_DEFINITIONS "VITA_DEBUG_CLEARCOLOR=1")
 endif()
+if(FARCRY_VITA_PERF_TELEMETRY)
+  # Enable every existing telemetry producer, not only System and the renderer.
+  # APPEND preserves other diagnostic definitions on these source files.
+  set_property(SOURCE
+    ${FARCRY_ROOT}/CrySystem/System.cpp
+    ${FARCRY_ROOT}/CryGame/Game.cpp
+    ${FARCRY_ROOT}/CryPhysics/physicalworld.cpp
+    ${FARCRY_ROOT}/CryAnimation/CrySkinFull.cpp
+    ${FARCRY_ROOT}/Cry3DEngine/terrain_water_quad.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/LeafBufferVita.cpp
+    ${FARCRY_ROOT}/RenderDll/XRenderNULL/VitaRenderer.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS "VITA_PERF_TELEMETRY=1")
+endif()
 if(NOT FARCRY_VITA_RENDER_SCALE STREQUAL "100")
   set_property(SOURCE ${FARCRY_ROOT}/RenderDll/XRenderNULL/VitaRenderer.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS
@@ -198,8 +225,23 @@ foreach(_luasrc ${VITA_SOURCE_LIST})
   endif()
 endforeach()
 
+# The SDK's stock vitaGL archive is commonly built without
+# ENABLE_LEGACY_PIPELINE: it still exports vglDrawObjects, but as a two-byte
+# no-op.  Far Cry's static-world fast path requires the real upstream
+# implementation, so the Vita kit carries the official df63ce8 build made with
+# ENABLE_LEGACY_PIPELINE=1.  Keep the SDK library as a developer fallback.
+set(FARCRY_VITAGL_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/vita_kit/libvitaGL_farcry_heap.a")
+if(EXISTS "${FARCRY_VITAGL_LIBRARY}")
+  # Exact header/archive pair; upstream's guest-side allocator has real pool
+  # accounting instead of the tested emulator's unimplemented mspace statistics.
+  target_include_directories(${PROJECT_NAME} BEFORE PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/vita_kit/vitagl/include")
+else()
+  message(FATAL_ERROR "Build pinned custom-heap vitaGL: python -S engine_port/tools/build_vitagl.py")
+endif()
+
 target_link_libraries(${PROJECT_NAME}
-  vitaGL
+  ${FARCRY_VITAGL_LIBRARY}
   stdc++
   vitashark
   SceShaccCgExt
@@ -210,6 +252,7 @@ target_link_libraries(${PROJECT_NAME}
   SceGxm_stub
   SceDisplay_stub
   SceCtrl_stub
+  SceMotion_stub
   SceTouch_stub
   SceHid_stub
   SceAppMgr_stub
@@ -223,6 +266,7 @@ target_link_libraries(${PROJECT_NAME}
   SceNetCtl_stub
   SceAudio_stub
   SceAudioIn_stub
+	SceAvPlayer_stub
   SceRtc_stub
   SceProcessmgr_stub
   SceIofilemgr_stub

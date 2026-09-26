@@ -44,6 +44,7 @@ float      Bink_GetFrameRate(BinkHandle &handle);
 uint32_t   Bink_GetNumFrames(BinkHandle &handle);
 uint32_t   Bink_GetCurrentFrameNum(BinkHandle &handle);
 uint32_t   Bink_GetNextFrame(BinkHandle &handle, YUVbuffer yuv);
+uint32_t   Bink_GetNextFrameVideoOnly(BinkHandle &handle, YUVbuffer yuv);
 void       Bink_GotoFrame(BinkHandle &handle, uint32_t frameNum);
 
 #endif // VITA_BINK_H

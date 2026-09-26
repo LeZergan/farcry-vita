@@ -63,6 +63,7 @@ CAnimSceneNode::CAnimSceneNode( IMovieSystem *sys )
 	m_lastConsoleKey = -1;
 	m_lastMusicKey = -1;
 	m_lastSequenceKey = -1;
+	m_time = 0.0f;
 
 	if (!s_nodeParamsInitialized)
 	{
@@ -178,7 +179,7 @@ void CAnimSceneNode::Animate( SAnimContext &ec )
 	{
 		ISelectKey key;
 		int cameraKey = cameraTrack->GetActiveKey(ec.time,&key);
-		if (cameraKey != m_lastCameraKey/* && cameraKey > m_lastCameraKey*/)
+		if (cameraKey >= 0 && cameraKey != m_lastCameraKey/* && cameraKey > m_lastCameraKey*/)
 		{
 			if (!ec.bSingleFrame || key.time == ec.time) // If Single frame update key time must match current time.
 				ApplyCameraKey( key,ec );
@@ -190,9 +191,43 @@ void CAnimSceneNode::Animate( SAnimContext &ec )
 	{
 		IEventKey key;
 		int nEventKey = pEventTrack->GetActiveKey(ec.time,&key);
-		if (nEventKey != m_lastEventKey && nEventKey >= 0)
+		if (nEventKey >= 0)
 		{
-			if (!ec.bSingleFrame || key.time == ec.time) // If Single frame update key time must match current time.
+			/* GetActiveKey returns only the newest key at this time.  At Vita frame
+			   rates a single update can cross several discrete event keys; firing
+			   only the newest silently loses the earlier mission/radio triggers. */
+			if (m_lastEventKey < 0)
+			{
+				if (!ec.bSingleFrame || key.time == ec.time)
+					ApplyEventKey(key, ec);
+			}
+			else if (nEventKey > m_lastEventKey)
+			{
+				for (int nKey = m_lastEventKey + 1; nKey <= nEventKey; ++nKey)
+				{
+					pEventTrack->GetKey(nKey, &key);
+					if (!ec.bSingleFrame || key.time == ec.time)
+						ApplyEventKey(key, ec);
+				}
+			}
+			else if (nEventKey < m_lastEventKey)
+			{
+				/* Cycled tracks wrap back to key zero.  Finish the tail before the
+				   wrapped head so authored event order is preserved. */
+				for (int nKey = m_lastEventKey + 1; nKey < pEventTrack->GetNumKeys(); ++nKey)
+				{
+					pEventTrack->GetKey(nKey, &key);
+					if (!ec.bSingleFrame || key.time == ec.time)
+						ApplyEventKey(key, ec);
+				}
+				for (int nKey = 0; nKey <= nEventKey; ++nKey)
+				{
+					pEventTrack->GetKey(nKey, &key);
+					if (!ec.bSingleFrame || key.time == ec.time)
+						ApplyEventKey(key, ec);
+				}
+			}
+			else if (key.time == ec.time && !ec.bSingleFrame)
 				ApplyEventKey(key, ec);
 		}
 		m_lastEventKey = nEventKey;
@@ -228,7 +263,17 @@ void CAnimSceneNode::Animate( SAnimContext &ec )
 		{
 			ISoundKey key;
 			int nSoundKey = pSoundTrack[i]->GetActiveKey(ec.time, &key);
-			if (nSoundKey!=m_SoundInfo[i].nLastKey || key.time==ec.time || nSoundKey==-1)
+			/* An inactive track returns -1 without a valid key payload.  Release
+			   the prior sound without inspecting any member of that payload. */
+			if (nSoundKey==-1)
+			{
+				if (m_SoundInfo[i].nLastKey!=-1)
+				{
+					m_SoundInfo[i].nLastKey=-1;
+					ApplySoundKey( pSoundTrack[i],nSoundKey,i,key,ec );
+				}
+			}
+			else if (nSoundKey!=m_SoundInfo[i].nLastKey || key.time==ec.time)
 			{
 				if (!ec.bSingleFrame || key.time == ec.time) // If Single frame update key time must match current time.
 				{
@@ -300,6 +345,7 @@ void CAnimSceneNode::Reset()
 	m_lastMusicKey = -1;
 	m_lastSequenceKey = -1;
 	m_sequenceCameraId = -1;
+	m_time = 0.0f;
 
 	ReleaseSounds();
 }
@@ -342,14 +388,18 @@ void CAnimSceneNode::ApplyCameraKey( ISelectKey &key,SAnimContext &ec )
 void CAnimSceneNode::ApplyEventKey(IEventKey &key, SAnimContext &ec)
 {
 	char funcName[1024];
-	strcpy(funcName, "Event_");
-	strcat(funcName, key.event);
+	/* Event names are asset data.  A malformed or modded sequence must not be
+	   able to overflow the movie thread's stack while dispatching a trigger. */
+	snprintf(funcName, sizeof(funcName), "Event_%s", key.event);
+	funcName[sizeof(funcName)-1] = 0;
 	m_pMovie->SendGlobalEvent(funcName);
 }
 
 //////////////////////////////////////////////////////////////////////////
 void CAnimSceneNode::ApplySoundKey( IAnimTrack *pTrack,int nCurrKey,int nLayer, ISoundKey &key, SAnimContext &ec)
 {
+	if (!pTrack || nLayer < 0 || nLayer >= SCENE_SOUNDTRACKS)
+		return;
 	if (m_SoundInfo[nLayer].nLastKey==-1)
 	{
 		if (m_SoundInfo[nLayer].pSound)
@@ -357,6 +407,8 @@ void CAnimSceneNode::ApplySoundKey( IAnimTrack *pTrack,int nCurrKey,int nLayer, 
 		m_SoundInfo[nLayer].pSound=NULL;
 		return;
 	}
+	if (!key.pszFilename || !key.pszFilename[0])
+		return;
 	if (((strcmp(m_SoundInfo[nLayer].sLastFilename.c_str(), key.pszFilename)) || (!m_SoundInfo[nLayer].pSound)))
 	{
 		int flags = 0;

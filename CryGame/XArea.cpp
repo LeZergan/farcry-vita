@@ -911,20 +911,35 @@ void	CXAreaMgr::UpdatePlayer(CXAreaUser& user)
 //		return;
 
 //	pos = player->GetGame()->GetSystem()->GetViewCamera().GetPos();
-	// get check player position - not foot
-	user.m_vPos = user.m_pEntity->GetPos() + Vec3d(0,0,1);
-	if (user.m_vPos == m_lastUpdatePos)
+	// Check the player's torso, not the feet. At low frame rates the old single
+	// point sample could jump completely across a narrow area trigger, losing
+	// radio dialogue and scripted events. Sweep the travelled segment in bounded
+	// half-metre steps so enter/leave callbacks cannot be skipped.
+	const Vec3d vTargetPos = user.m_pEntity->GetPos() + Vec3d(0,0,1);
+	if (vTargetPos == m_lastUpdatePos)
 		return;
-	m_lastUpdatePos = user.m_vPos;
+	const Vec3d vStartPos = m_lastUpdatePos;
+	const Vec3d vTravel = vTargetPos - vStartPos;
+	const float fTravel = vTravel.GetLength();
+	int nSweepSteps = (int)(fTravel * 2.0f) + 1;
+	if (vStartPos == Vec3d(0,0,0)) nSweepSteps = 1;
+	if (nSweepSteps < 1) nSweepSteps = 1;
+	if (nSweepSteps > 8) nSweepSteps = 8;
+	m_lastUpdatePos = vTargetPos;
+
+	for (int nSweepStep = 1; nSweepStep <= nSweepSteps; ++nSweepStep)
+	{
+		const float fStep = (float)nSweepStep / (float)nSweepSteps;
+		user.m_vPos = vStartPos + vTravel*fStep;
 
 //	player->GetGame()->GetSystem()->GetI3DEngine()->GetBuildingManager()->CheckInside( pos, building, sector );
 //	sector = (int)player->GetGame()->GetSystem()->GetI3DEngine()->GetVisAreaFromPos(pos);
 
-	m_sCurStep++;
+		m_sCurStep++;
 
 	// check all the areas player is in already
-	for(unsigned int inIdx=0; inIdx<user.m_HostedAreasIdx.size(); inIdx++)
-	{
+		for(unsigned int inIdx=0; inIdx<user.m_HostedAreasIdx.size(); inIdx++)
+		{
 		aIdx = user.m_HostedAreasIdx[inIdx];
 		//safecheck for editor
 		if( aIdx>=m_vpAreas.size() )
@@ -937,23 +952,23 @@ void	CXAreaMgr::UpdatePlayer(CXAreaUser& user)
 			user.m_HostedAreasIdx.erase( user.m_HostedAreasIdx.begin() + inIdx );
 			inIdx--;
 		}
-	}
+		}
 
 	// check all the rest areas (player is outside of them)
-	for(aIdx=0; aIdx<m_vpAreas.size(); aIdx++)
-		if( m_vpAreas[aIdx]->m_stepID != m_sCurStep )
-			if(m_vpAreas[aIdx]->IsPointWithin(user.m_vPos))
-			{
+		for(aIdx=0; aIdx<m_vpAreas.size(); aIdx++)
+			if( m_vpAreas[aIdx]->m_stepID != m_sCurStep )
+				if(m_vpAreas[aIdx]->IsPointWithin(user.m_vPos))
+				{
 				// was outside, now inside - do enter area
 				if(ProceedExclusiveEnter( user, aIdx ))
 					m_vpAreas[aIdx]->EnterArea(user);
 				user.m_HostedAreasIdx.push_back( aIdx );
-			}
+				}
 
 	//
 	//update fade. For all hosted areas
-	for(unsigned int inIdx=0; inIdx<user.m_HostedAreasIdx.size(); inIdx++)
-	{
+		for(unsigned int inIdx=0; inIdx<user.m_HostedAreasIdx.size(); inIdx++)
+		{
 		aIdx = user.m_HostedAreasIdx[inIdx];
 		//safecheck for editor
 		if( aIdx>=m_vpAreas.size() )
@@ -964,8 +979,10 @@ void	CXAreaMgr::UpdatePlayer(CXAreaUser& user)
 		// this area is not active - overriden by same groupId area with higher id (exclusive areas)
 		if( !m_vpAreas[aIdx]->m_bIsActive )
 			continue;
-		ProceedExclusiveUpdate(user, aIdx);
+			ProceedExclusiveUpdate(user, aIdx);
+		}
 	}
+	user.m_vPos = vTargetPos;
 }
 
 //	checks for areas in the same group, if entered area is lower priority (areaID) - return false 

@@ -446,6 +446,17 @@ void CryModelSubmesh::AddCurrentRenderData(CCObject *obj, CCObject *obj1, const 
 	else
 	{
 		// the new version : we do have mapping between materials in mesh and materials in the Leaf Buffers
+#if defined(__vita__) || defined(LINUX)
+		/* LeafBufferVita collapses all primitive groups using one material into
+		   that material's single CMatInfo/index range.  The original loop below
+		   still walks primitive groups, though, and therefore submitted that same
+		   aggregated render element once for every group carrying the material.
+		   CCG characters can contain several such groups; the first-person weapon
+		   made the mistake especially expensive by redrawing identical skinned
+		   geometry dozens of times.  Keep the group walk for its material mapping,
+		   but submit each collapsed material exactly once. */
+		uint64 nVitaSubmittedMaterials = 0;
+#endif
 		for (unsigned nPrimGroup=0; nPrimGroup<pGeomInfo->m_arrPrimGroups.size(); nPrimGroup++)
 		{ 
 			unsigned nMaterial = pGeomInfo->m_arrPrimGroups[nPrimGroup].nMaterial;
@@ -455,6 +466,31 @@ void CryModelSubmesh::AddCurrentRenderData(CCObject *obj, CCObject *obj1, const 
 			   nPrimGroup reads past list2 and floods Vita with asserts. */
 			if (!pLeafBuffer->m_pMats || nMaterial >= (unsigned)pLeafBuffer->m_pMats->size())
 				continue;
+#if defined(__vita__) || defined(LINUX)
+			if (nMaterial < 64)
+			{
+				const uint64 nMaterialBit = ((uint64)1) << nMaterial;
+				if (nVitaSubmittedMaterials & nMaterialBit)
+					continue;
+				nVitaSubmittedMaterials |= nMaterialBit;
+			}
+			else
+			{
+				/* Character material counts are normally well below 64.  Preserve
+				   correctness for an outlier without allocating a per-frame set. */
+				bool bAlreadySubmitted = false;
+				for (unsigned nPreviousGroup = 0; nPreviousGroup < nPrimGroup; ++nPreviousGroup)
+				{
+					if (pGeomInfo->m_arrPrimGroups[nPreviousGroup].nMaterial == nMaterial)
+					{
+						bAlreadySubmitted = true;
+						break;
+					}
+				}
+				if (bAlreadySubmitted)
+					continue;
+			}
+#endif
 			CMatInfo& mi = (*pLeafBuffer->m_pMats)[nMaterial];
 			CREOcLeaf * pREOcLeaf  = mi.pRE;
 			SShaderItem si = mi.shaderItem;//m_pMesh->getShader(nMaterial);
@@ -463,11 +499,11 @@ void CryModelSubmesh::AddCurrentRenderData(CCObject *obj, CCObject *obj1, const 
 			if (rParams.pMaterial)
 			{
 				// Assume that the root material is the first material, sub materials start from index 1.
-				if (nPrimGroup == 0)
+				if (nMaterial == 0)
 					si = rParams.pMaterial->GetShaderItem();
-				else if (nPrimGroup-1 < unsigned(rParams.pMaterial->GetSubMtlCount()))
+				else if (nMaterial-1 < unsigned(rParams.pMaterial->GetSubMtlCount()))
 				{
-					si = rParams.pMaterial->GetSubMtl(nPrimGroup-1)->GetShaderItem();
+					si = rParams.pMaterial->GetSubMtl(nMaterial-1)->GetShaderItem();
 				}
 			}
 
@@ -1145,6 +1181,17 @@ void CryModelSubmesh::ProcessSkinning(const Vec3& t, const Matrix44& mtxModel, i
 
 	bool bNeedTangents = ef && (ef->GetFlags() & EF_NEEDTANGENTS);
 	bool bNeedNormals = ef && (ef->GetFlags() & EF_NEEDNORMALS);
+#if defined(__vita__) || defined(LINUX)
+	/* CVitaRenderer consumes P3F/COL4UB/TEX2F only: it never enables a normal
+	   array and never reads VSF_TANGENTS.  Carrying the desktop shader's
+	   EF_NEEDTANGENTS/EF_NEEDNORMALS flags into this fixed-function backend made
+	   every visible character skin/copy tangent bases that were discarded before
+	   the draw.  The first-person weapon activates this path continuously. */
+	bNeedTangents = false;
+	bNeedNormals = false;
+	bShowTangents = false;
+	bShowNormals = false;
+#endif
 
 	int nCurrentFrameID = g_GetIRenderer()->GetFrameID();
 #ifdef UNIQUE_VERT_BUFF_PER_INSTANCE

@@ -43,6 +43,10 @@
 #include "ScriptObjectSynched2DTable.h"			// CScriptObjectSynched2DTable
 #include "ScriptObjectVehicle.h"
 #include "ScriptObjectRenderer.h"
+
+#if defined(__vita__) || defined(LINUX)
+#include <psp2/kernel/processmgr.h>
+#endif
 #include "ScriptObjectStream.h"
 #include "ScriptObjectWeaponClass.h"
 #include "ScriptObjectAI.h"
@@ -79,6 +83,8 @@ typedef std::vector< TCHAR > tvector;
 #if defined(__vita__)
 //! engine_port/VitaInput.cpp -- lets the front touch panel drive the UI cursor.
 extern "C" void Vita_SetUICursorActive(int active);
+extern "C" int Vita_PhysicsDispatch(IPhysicalWorld *pWorld, float fStep);
+extern "C" void Vita_PhysicsJoin();
 
 static void VitaLevelLoadTrace(const char *step)
 {
@@ -854,6 +860,16 @@ bool CXGame::IsInPause(IProcess *pProcess)
 //! update all game and children
 bool CXGame::Update()
 {
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	const SceUInt64 nVitaFrameStartUs = sceKernelGetProcessTimeWide();
+	SceUInt64 nVitaSystemEndUs = nVitaFrameStartUs;
+	SceUInt64 nVitaPreRenderUs = nVitaFrameStartUs;
+	SceUInt64 nVitaRenderEndUs = nVitaFrameStartUs;
+	SceUInt64 nVitaViewEndUs = nVitaFrameStartUs;
+	SceUInt64 nVitaHudEndUs = nVitaFrameStartUs;
+	SceUInt64 nVitaOverlayEndUs = nVitaFrameStartUs;
+	SceUInt64 nVitaPresentEndUs = nVitaFrameStartUs;
+#endif
 	if (!m_nDEBUG_TIMING)
 	{
 		m_fDEBUG_STARTTIMER = m_pSystem->GetITimer()->GetAsyncCurTime();
@@ -976,6 +992,9 @@ bool CXGame::Update()
 #endif
 		return (false);
 	}
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaSystemEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	if (IsMultiplayer()) {
 		pe_params_flags pf; pf.flagsAND = ~pef_update;
@@ -1046,6 +1065,9 @@ bool CXGame::Update()
 	// network end
 
 	// system rendering
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaPreRenderUs = sceKernelGetProcessTimeWide();
+#endif
 	if (bRenderFrame)
 	{
 		// render begin must be always called anyway to clear buffer, draw buttons etc.
@@ -1054,6 +1076,9 @@ bool CXGame::Update()
 		m_pSystem->Render();
 		pTimer->MeasureTime("3SysRend");
 	}
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaRenderEndUs = sceKernelGetProcessTimeWide();
+#endif
 #if defined(__vita__)
 	/* First person, driven from the game loop rather than from CPlayer::Update.
 	   Every previous attempt lived inside CPlayer::Update, and a 164 KB log of a
@@ -1090,8 +1115,10 @@ bool CXGame::Update()
 			bViewDriven = pLocalPlayer->m_bVitaReachedViewUpdate;
 		}
 
+#if defined(VITA_PERF_TELEMETRY)
 		static unsigned s_nViewReportCounter = 0;
 		if ((s_nViewReportCounter++ % 120) == 0 && m_pLog)
+		{
 			m_pLog->LogToFile("\001[VITA][VIEW] entity=%p player=%p updateRan=%d viewDriven=%d needUpdate=%d firstPerson=%d vehicle=%p isMine=%d hideLocal=%d pause=%d",
 				(void *)pMyPlayerEntity, (void *)pLocalPlayer, bPlayerUpdated ? 1 : 0,
 				bViewDriven ? 1 : 0,
@@ -1100,6 +1127,12 @@ bool CXGame::Update()
 				pLocalPlayer ? (void *)pLocalPlayer->GetVehicle() : (void *)0,
 				pLocalPlayer ? (pLocalPlayer->IsMyPlayer() ? 1 : 0) : -1,
 				m_bHideLocalPlayer ? 1 : 0, bPause ? 1 : 0);
+			const CCamera &view = m_pSystem->GetViewCamera();
+			const Vec3d pos = view.GetPos(), angles = view.GetAngles();
+			m_pLog->LogToFile("\001[VITA][CAMERA] pos=%.3f,%.3f,%.3f angles=%.3f,%.3f,%.3f",
+				pos.x, pos.y, pos.z, angles.x, angles.y, angles.z);
+		}
+#endif
 
 		if (pLocalPlayer && !bViewDriven)
 		{
@@ -1131,13 +1164,18 @@ bool CXGame::Update()
 	   resolves -- so a HUD that never appears usually means that call never
 	   happened rather than anything wrong with the drawing. */
 	{
+#if defined(VITA_PERF_TELEMETRY)
 		static unsigned s_nHudReportCounter = 0;
 		if ((s_nHudReportCounter++ % 120) == 0 && m_pLog)
 			m_pLog->LogToFile("\001[VITA][HUD] currentUI=%p pause=%d client=%p displayHud=%d cl_display_hud=%d",
 				(void *)m_pCurrentUI, bPause ? 1 : 0, (void *)m_pClient,
 				m_pClient ? (m_pClient->m_bDisplayHud ? 1 : 0) : -1,
 				cl_display_hud ? cl_display_hud->GetIVal() : -1);
+#endif
 	}
+#endif
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaViewEndUs = sceKernelGetProcessTimeWide();
 #endif
 	// update the HUD
 	if (m_pCurrentUI && !bPause && m_pClient && m_pClient->m_bDisplayHud)
@@ -1145,6 +1183,15 @@ bool CXGame::Update()
 		FRAME_PROFILER( "GameUpdate:HUD",m_pSystem,PROFILE_GAME );
 
 		// update hud itself
+#if defined(__vita__)
+		/* The retail HUD mixes an atlas batch, radar draws, damage overlays and
+		   font calls.  Several of those helpers open their own 2D bracket, while
+		   the standalone System:DrawImage calls did not.  Keep one outer bracket
+		   for the whole HUD; the Vita renderer now treats the inner brackets as
+		   nesting.  This turns dozens of per-image state queries and matrix
+		   push/pop pairs into one setup/restore without changing draw order. */
+		m_pRenderer->Set2DMode(true, 800, 600);
+#endif
 		if(!m_pCurrentUI->Update())
 		{
 #if defined(LINUX)
@@ -1152,6 +1199,9 @@ bool CXGame::Update()
 #endif
 			m_bUpdateRet = false;
 		}
+#if defined(__vita__)
+		m_pRenderer->Set2DMode(false, 800, 600);
+#endif
 
     // update ingame-dialog-manager
 		if (m_pIngameDialogMgr)
@@ -1178,6 +1228,12 @@ bool CXGame::Update()
 			m_pUISystem->Draw();
 		}
 	}
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaHudEndUs = sceKernelGetProcessTimeWide();
+#endif
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaOverlayEndUs = sceKernelGetProcessTimeWide();
+#endif
 
 	if(a_DrawArea->GetIVal())
   {
@@ -1207,6 +1263,15 @@ bool CXGame::Update()
 	pTimer->MeasureTime("NetStats");
 
 	// end of frame
+	int bVitaPhysicsDispatched = 0;
+#if defined(__vita__)
+	/* Everything that can author physical state for this frame has finished.
+	   Run the next step on CPU 1 while CPU 0/GPU present this frame, then join
+	   before script timers or process messages can touch gameplay again. */
+	if (bRenderFrame && !bPause && !IsMultiplayer())
+		bVitaPhysicsDispatched = Vita_PhysicsDispatch(
+			m_pSystem->GetIPhysicalWorld(), pTimer->GetFrameTime());
+#endif
 	if (bRenderFrame)
   {	
 		// same thing as for render begin		
@@ -1215,6 +1280,13 @@ bool CXGame::Update()
 
 		m_pSystem->RenderEnd();
 	}
+#if defined(__vita__)
+	if (bVitaPhysicsDispatched)
+		Vita_PhysicsJoin();
+#endif
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	nVitaPresentEndUs = sceKernelGetProcessTimeWide();
+#endif
   pTimer->MeasureTime("3Rend Up");
 	
 	// get messages from process
@@ -1263,6 +1335,43 @@ bool CXGame::Update()
 	//////////////////////////////////////////////////////////////////////////
 
 	pTimer->MeasureTime("EndGameUp");
+
+#if defined(__vita__) && defined(VITA_PERF_TELEMETRY)
+	/* Sparse, averaged wall-clock stage timings from the real process.  These
+	   distinguish simulation pressure from vitaGL submission and swap waits;
+	   the ordinary frame-time line cannot. */
+	{
+		const SceUInt64 nEndUs = sceKernelGetProcessTimeWide();
+		static unsigned s_nFrames = 0;
+		static SceUInt64 s_nSystemUs = 0, s_nGameUs = 0, s_nRenderUs = 0;
+		static SceUInt64 s_nOverlayUs = 0, s_nViewUs = 0, s_nHudUs = 0, s_nUIUs = 0;
+		static SceUInt64 s_nPresentUs = 0, s_nTailUs = 0, s_nTotalUs = 0;
+		s_nSystemUs += nVitaSystemEndUs - nVitaFrameStartUs;
+		s_nGameUs += nVitaPreRenderUs - nVitaSystemEndUs;
+		s_nRenderUs += nVitaRenderEndUs - nVitaPreRenderUs;
+		s_nOverlayUs += nVitaOverlayEndUs - nVitaRenderEndUs;
+		s_nViewUs += nVitaViewEndUs - nVitaRenderEndUs;
+		s_nHudUs += nVitaHudEndUs - nVitaViewEndUs;
+		s_nUIUs += nVitaOverlayEndUs - nVitaHudEndUs;
+		s_nPresentUs += nVitaPresentEndUs - nVitaOverlayEndUs;
+		s_nTailUs += nEndUs - nVitaPresentEndUs;
+		s_nTotalUs += nEndUs - nVitaFrameStartUs;
+		if ((++s_nFrames % 120) == 0 && m_pLog)
+		{
+			m_pLog->LogToFile("\001[VITA][STAGE] avgUs total=%u system=%u game=%u render=%u hudui=%u present=%u tail=%u",
+				(unsigned)(s_nTotalUs / 120), (unsigned)(s_nSystemUs / 120),
+				(unsigned)(s_nGameUs / 120), (unsigned)(s_nRenderUs / 120),
+				(unsigned)(s_nOverlayUs / 120), (unsigned)(s_nPresentUs / 120),
+				(unsigned)(s_nTailUs / 120));
+			m_pLog->LogToFile("\001[VITA][OVERLAY] avgUs view=%u hud=%u ui=%u",
+				(unsigned)(s_nViewUs / 120), (unsigned)(s_nHudUs / 120),
+				(unsigned)(s_nUIUs / 120));
+			s_nSystemUs = s_nGameUs = s_nRenderUs = s_nOverlayUs = 0;
+			s_nViewUs = s_nHudUs = s_nUIUs = 0;
+			s_nPresentUs = s_nTailUs = s_nTotalUs = 0;
+		}
+	}
+#endif
 
 	//////////////////////////////////////////////////////////////////////////
 	// End Profiling Frame

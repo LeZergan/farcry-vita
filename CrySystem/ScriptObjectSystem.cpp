@@ -1591,19 +1591,16 @@ int CScriptObjectSystem::DrawTriStrip(IFunctionHandler *pH)
 int CScriptObjectSystem::DrawRectShader(IFunctionHandler *pH)
 {
 	CHECK_PARAMETERS(9);
-	const char *pszShaderName;
-	float x, y, w, h, r, g, b, a;
-	pH->GetParam(1, pszShaderName);
-	pH->GetParam(2, x);
-	pH->GetParam(3, y);
-	pH->GetParam(4, w);
-	pH->GetParam(5, h);
-	pH->GetParam(6, r);
-	pH->GetParam(7, g);
-	pH->GetParam(8, b);
-	pH->GetParam(9, a);
+	const char *pszShaderName=0;
+	float x=0, y=0, w=0, h=0, r=1, g=1, b=1, a=1;
+	if (!m_pRenderer || !pH->GetParam(1, pszShaderName) || !pszShaderName ||
+		!pH->GetParam(2, x) || !pH->GetParam(3, y) ||
+		!pH->GetParam(4, w) || !pH->GetParam(5, h) ||
+		!pH->GetParam(6, r) || !pH->GetParam(7, g) ||
+		!pH->GetParam(8, b) || !pH->GetParam(9, a))
+		return pH->EndFunction();
   IShader *sh = m_pRenderer->EF_LoadShader((char *)pszShaderName, eSH_Screen);
-  if (!(sh->GetFlags() & EF_NOTFOUND))
+  if (sh && !(sh->GetFlags() & EF_NOTFOUND))
   {
     m_pRenderer->EF_StartEf();
     CFColor col(r,g,b,a);

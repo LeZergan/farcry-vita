@@ -1,17 +1,16 @@
 Far Cry - PS Vita tester kit
 ============================
 
-Two pieces: a small VPK that installs the executable, and the game data. The
-data is ~3.4 GB and lives in ux0:data, not in ux0:app -- ux0:app holds what the
-VPK installed and is rewritten every time you reinstall.
+The VPK installs the executable. The original Far Cry PC game data is not
+included; copy your own data separately as described below.
 
 
 1. Install the VPK
 ------------------
-Copy FarCry.vpk to the Vita (FTP, USB, or the memory card in a PC reader) and
-install it with VitaShell. It registers as title FCRY00002, "Far Cry".
+Copy FarCry.vpk to the Vita and install it with VitaShell. It registers as
+title FCRY00002, "Far Cry".
 
-Do not launch it yet -- without the data below it will not get past startup.
+Do not launch it until the data below is installed.
 
 
 2. Copy the data
@@ -20,7 +19,7 @@ Copy the "farcry" folder from ux0_data\ in this kit to:
 
     ux0:data/farcry/
 
-so that you end up with:
+The result must contain at least:
 
     ux0:data/farcry/fcdata/
     ux0:data/farcry/Levels/
@@ -28,60 +27,88 @@ so that you end up with:
     ux0:data/farcry/profiles/
     ux0:data/farcry/fcsplash.bmp
 
-The executable chdir()s to ux0:data/farcry at startup, and every path the engine
-opens is relative to that, so the folder name matters -- keep it "farcry".
-
-FTP is slow for 3.4 GB. Putting the memory card in a PC reader is much faster.
+The executable selects ux0:data/farcry when it contains
+fcdata/Scripts.pak. Keep the folder name exactly "farcry".
 
 
 3. Memory
 ---------
-param.sfo sets ATTRIBUTE2=12, granting extended memory (~365 MB rather than the
-usual ~256 MB). The game will not start without it: the engine heap alone needs
-more than 160 MB before a level finishes loading, and the whole footprint is
-about 337 MB. Keep that attribute if you repack the VPK yourself.
+param.sfo sets ATTRIBUTE2=12, granting the extended-memory budget. Keep that
+attribute when repacking: the engine and a loaded level require substantially
+more than a normal Vita application's memory allowance.
 
 
-What works
-----------
-- Boots to the real retail menu, loads levels (~10 s for Training)
-- Collision against world geometry
-- Sound effects and music (real sceAudioOut mixer)
-- Bink video: menu background, demo reels, cut scenes
-- Sky box
-- Controls: left stick moves (partial deflection walks), right stick aims,
-  R fires, L zooms, Cross jumps, Circle crouches, Square reloads,
-  Triangle uses, Select+D-pad Down goes prone, rear touch leans,
-  front touch drives the menu pointer
+Release performance profile
+---------------------------
+The canonical build renders the 3D scene internally at 480x272 (50%) and lets
+the Vita scale it to 960x544. UI remains display-resolution aware.
+
+Adaptive quality is enabled by default through sys_vita_adaptive_quality=1.
+It watches sustained frame time and progressively reduces only scalable world
+detail, sprites, particles, and LOD distance during expensive views. Controls,
+AI, audio, collision, and game rules stay active. Quality recovers slowly when
+there is enough headroom. Set sys_vita_adaptive_quality=0 to force the fixed
+baseline profile for comparison.
+
+Production builds disable benchmark autoloading and high-frequency timing-log
+writes. Diagnostic builds can be created with:
+
+    pwsh -File engine_port/build_vita.ps1 -Telemetry -AutoTestTraining
+
+That command writes engine_port/build_diagnostic/FarCry_diagnostic.vpk. It
+autoloads Training and records the detailed frame/stage/draw/memory counters in
+ux0:data/farcry/Log.txt; it is a measurement build, not the normal player VPK.
 
 
-Known broken - please report what you see
------------------------------------------
-- Lighting. Baked lightmaps are on but the fix is unverified; if the world
-  looks blotchy or worse than flat, set "r_lightmaps 0".
-- Some surfaces still render solid white or black.
-- HUD/UI elements are wrong in places.
-- Textures can flash while moving.
-- Nothing here has run on real hardware. Frame rate is the big unknown: the
-  SGX543 is fill-rate bound and this renderer does not batch draw calls.
+Controls
+--------
+- Left stick: move (partial deflection walks)
+- Right stick: aim
+- R: fire; L: zoom
+- Cross: jump; Circle: crouch; Square: reload; Triangle: use
+- D-pad Up/Down: change weapon
+- D-pad Left: throw grenade; D-pad Right: change fire mode
+- Select+Cross: sprint; Select+Square: flashlight
+- Select+Triangle: binoculars; Select+Circle: thermal vision
+- Select+D-pad Left: cycle grenade; Select+D-pad Right: drop weapon
+- Select+D-pad Down: prone; Select+Start: change view
+- Rear touch: lean; front touch: menu pointer
 
 
-If it runs badly
+Current state and test focus
+----------------------------
+Real-hardware telemetry has confirmed menu boot, Training/gameplay, level
+streaming, collision, sound/music, Bink video, sky rendering, and the control
+path. Previous hardware captures reached the 33.3 ms cap in lighter scenes but
+showed 50-72 ms frames in dense views. Those captures identified CPU render
+submission and occasional simulation catch-up as the main remaining costs.
+
+This build includes a new adaptive-quality controller, a tighter Vita physics
+catch-up limit, and removal of production telemetry overhead. It still needs a
+fresh real-hardware run before stable 30 FPS can be claimed. Test dense outdoor
+views, firefights, vehicles, water, cutscenes, saves/loads, and long sessions.
+
+Known visual issues that still need hardware confirmation:
+- Some lighting/lightmap combinations may look incorrect.
+- Some surfaces may render solid white or black.
+- HUD/UI elements can be wrong in places.
+- Textures may flash while moving.
+
+If the game fails or renders incorrectly, copy this log before relaunching:
+
+    ux0:data/farcry/Log.txt
+
+The first boot lines report which data root was selected.
+
+
+Renderer library
 ----------------
-Lower the internal resolution -- rebuild in engine_port/build_codex with
+libvitaGL_farcry_heap.a is built from Rinnegatamante/vitaGL commit
+df63ce8211ce4a42d7092824ffa487bc9671105a with:
 
-    cmake -DFARCRY_VITA_RENDER_SCALE=75 .    (or 66)
+    python -S engine_port/tools/build_vitagl.py
 
-then repack. The Vita's scaler brings it back to 960x544, so nothing is cropped
-and no draw distance is lost.
-
-
-If it fails at startup
-----------------------
-Suspect memory. Lower the vitaGL pool in CVitaRenderer::Init before touching the
-newlib heap in engine_port/main.cpp -- the heap requirement is measured (120 MB
-and 160 MB both die during precaching, 224 MB is stable) and the pool size is
-not.
-
-Check ux0:data/farcry/Log.txt for how far it got. The boot trace prints which
-data root it selected on the first line.
+The helper enables ENABLE_LEGACY_PIPELINE=1 and HAVE_CUSTOM_HEAP=1 and writes
+the matching header and license notices. The legacy flag is required by the
+mapped static-geometry path. CMake requires this archive/header pair and stops
+with rebuild instructions when it is missing. There is no SDK fallback.

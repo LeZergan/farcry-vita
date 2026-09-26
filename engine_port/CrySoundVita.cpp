@@ -39,7 +39,8 @@ namespace
 // to the trigger and long enough that the mixer thread is not woken constantly.
 const int kOutRate    = 48000;
 const int kGrain      = 1024;
-const int kMaxChannels = 32;
+const int kMaxChannels = 40;
+const int kMovieVoicePriority = 230;
 const int kMaxStreamBytes = 24 * 1024 * 1024;
 /* fcdata/Sounds.pak alone is 243 MB and the engine keeps decoded buffers
    resident until its own cache evicts them, against a 224 MB newlib heap
@@ -107,6 +108,10 @@ CS_TELLCALLBACK  g_tell  = 0;
 
 inline void Lock()   { if (g_mutex >= 0) sceKernelLockMutex(g_mutex, 1, 0); }
 inline void Unlock() { if (g_mutex >= 0) sceKernelUnlockMutex(g_mutex, 1); }
+inline bool TryLock()
+{
+	return g_mutex < 0 || sceKernelTryLockMutex(g_mutex, 1) >= 0;
+}
 
 } // namespace
 
@@ -154,6 +159,8 @@ struct CS_STREAM
 	volatile unsigned int readFrame;
 	unsigned char *scratch;
 	int    scratchBytes;
+	volatile int callbackUsers;
+	volatile int closing;
 };
 
 namespace
@@ -347,12 +354,21 @@ void PumpAllStreams()
 	CS_STREAM *snapshot[kMaxCallbackStreams];
 	Lock();
 	for (int i = 0; i < kMaxCallbackStreams; i++)
+	{
 		snapshot[i] = g_cbStreams[i];
+		if (snapshot[i] && !snapshot[i]->closing)
+			__sync_add_and_fetch(&snapshot[i]->callbackUsers, 1);
+		else
+			snapshot[i] = 0;
+	}
 	Unlock();
 
 	for (int i = 0; i < kMaxCallbackStreams; i++)
 		if (snapshot[i])
+		{
 			PumpStream(snapshot[i]);
+			__sync_sub_and_fetch(&snapshot[i]->callbackUsers, 1);
+		}
 }
 
 //! Adds one block of a callback-driven stream (music) into the accumulator.
@@ -406,23 +422,33 @@ void MixStreamChannel(MixChannel &ch)
 	}
 }
 
-//! Mixes one block. Called only from the audio thread, with the lock held.
+//! Mixes one block.  Channel ownership is taken one channel at a time: holding
+//! the mutex across all 32 channels made gameplay wait several milliseconds
+//! behind combat-heavy mixes even though only a few channel fields are shared.
 void MixBlock(short *out)
 {
 	memset(g_mixAccum, 0, sizeof(int) * kGrain * 2);
 
 	for (int c = 0; c < kMaxChannels; c++)
 	{
+		Lock();
 		MixChannel &ch = g_channels[c];
 		if (!ch.active || ch.paused || ch.muted)
+		{
+			Unlock();
 			continue;
+		}
 		if (ch.stream)
 		{
 			MixStreamChannel(ch);
+			Unlock();
 			continue;
 		}
 		if (!ch.sample)
+		{
+			Unlock();
 			continue;
+		}
 
 		const CS_SAMPLE *smp = ch.sample;
 		// CrySound volume and the master are both 0..255; 3D channels carry an
@@ -493,6 +519,7 @@ void MixBlock(short *out)
 			g_mixAccum[i * 2 + 1] += (int)(right * gainR);
 			ch.pos += ch.step;
 		}
+		Unlock();
 	}
 
 	for (int i = 0; i < kGrain * 2; i++)
@@ -553,9 +580,7 @@ int MixerThread(SceSize, void *)
 		}
 #endif
 
-		Lock();
 		MixBlock(block);
-		Unlock();
 
 		// Blocks until the previously queued block has been consumed, which is
 		// what paces this loop -- no sleeping or timing of our own.
@@ -672,7 +697,10 @@ void CS_Update()
 	// 3D attenuation is resolved here, once per game frame, rather than inside
 	// the mixer: the listener and emitter positions only change at frame rate,
 	// and the audio thread should stay a tight sample loop.
-	Lock();
+	/* Attenuation is frame-rate state and may safely wait one frame.  Never
+	   stall core 0 behind the mixer if it happens to own a channel briefly. */
+	if (!TryLock())
+		return;
 	for (int c = 0; c < kMaxChannels; c++)
 	{
 		MixChannel &ch = g_channels[c];
@@ -941,7 +969,7 @@ int CS_PlaySoundEx(int channel, CS_SAMPLE *sptr, CS_DSPUNIT *dsp, signed char st
 			int worst = -1, worstScore = 0x7fffffff;
 			for (int i = 0; i < kMaxChannels; i++)
 			{
-				if (g_channels[i].reserved)
+				if (g_channels[i].reserved || g_channels[i].priority >= kMovieVoicePriority)
 					continue;
 				const int score = g_channels[i].priority * 256 + g_channels[i].volume;
 				if (score < worstScore) { worstScore = score; worst = i; }
@@ -977,6 +1005,7 @@ signed char CS_StopSound(int channel)
 	g_channels[channel].active = false;
 	g_channels[channel].sample = 0;
 	g_channels[channel].stream = 0;
+	g_channels[channel].reserved = false;
 	Unlock();
 	return 1;
 }
@@ -1020,7 +1049,9 @@ signed char CS_SetMute(int channel, signed char mute)
 signed char CS_SetPriority(int channel, int priority)
 {
 	if (!ValidChannel(channel)) return 0;
+	Lock();
 	g_channels[channel].priority = priority;
+	Unlock();
 	return 1;
 }
 signed char CS_SetReserved(int channel, signed char reserved)
@@ -1239,7 +1270,13 @@ signed char CS_Stream_Close(CS_STREAM *stream)
 {
 	if (!stream) return 0;
 	// Detach from the mixer before any of the stream's memory goes away.
+	__sync_lock_test_and_set(&stream->closing, 1);
 	UnregisterCallbackStream(stream);
+	/* PumpAllStreams snapshots the registry before invoking callbacks.  A close
+	   can otherwise free this object while core 2 is using an older snapshot --
+	   a rare menu/cutscene transition crash. */
+	while (stream->callbackUsers > 0)
+		sceKernelDelayThread(1000);
 	Lock();
 	for (int i = 0; i < kMaxChannels; i++)
 		if (g_channels[i].stream == stream)

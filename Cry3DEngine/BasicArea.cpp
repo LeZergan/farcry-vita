@@ -177,9 +177,14 @@ void CBasicArea::DrawEntities( int nFogVolumeID, int nDLightMask,
 					continue;
 
 				// early sphere test agains left and right camera planes
-				if( bNotAllInFrustum && 
-						PlaneR.DistFromPlane(inf.m_vWSCenter) > inf.m_fWSRadius ||
-						PlaneR.DistFromPlane(inf.m_vWSCenter) > inf.m_fWSRadius )
+				/* Reject against both horizontal planes.  The old expression tested
+				   PlaneR twice (and the unparenthesized second test escaped the
+				   bNotAllInFrustum guard), so everything outside the left edge still
+				   reached the per-object renderer.  On Vita that is a large number of
+				   vegetation and brush draws which can never contribute a pixel. */
+				if (bNotAllInFrustum &&
+					(PlaneR.DistFromPlane(inf.m_vWSCenter) > inf.m_fWSRadius ||
+					 PlaneL.DistFromPlane(inf.m_vWSCenter) > inf.m_fWSRadius))
 					continue;
 
 				// get view distance
@@ -231,9 +236,9 @@ void CBasicArea::DrawEntities( int nFogVolumeID, int nDLightMask,
 					continue;
 
 				// early sphere test agains left and right camera planes
-				if( bNotAllInFrustum &&
-						PlaneR.DistFromPlane(inf.m_vWSCenter) > inf.m_fWSRadius+TERRAIN_SECTORS_MAX_OVERLAPPING ||
-						PlaneR.DistFromPlane(inf.m_vWSCenter) > inf.m_fWSRadius+TERRAIN_SECTORS_MAX_OVERLAPPING )
+				if (bNotAllInFrustum &&
+					(PlaneR.DistFromPlane(inf.m_vWSCenter) > inf.m_fWSRadius+TERRAIN_SECTORS_MAX_OVERLAPPING ||
+					 PlaneL.DistFromPlane(inf.m_vWSCenter) > inf.m_fWSRadius+TERRAIN_SECTORS_MAX_OVERLAPPING))
 					continue;
 
 				// get view distance

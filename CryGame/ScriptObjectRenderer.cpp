@@ -59,44 +59,53 @@ int CScriptObjectRenderer::Reset(IFunctionHandler *pH)
 int CScriptObjectRenderer::PushQuad(IFunctionHandler *pH)
 {
 	int params=pH->GetParamCount();
-	if(params<5)
+	if(params<5 || (params>5 && params<9))
 	{
 		m_pScriptSystem->RaiseError("CScriptObjectRenderer::PushQuad wrong number of params");
 		return pH->EndFunction();
 	}
-	float x,y,w,h,r=1,g=1,b=1,a=1,u0,v0,u1,v1;
+	float x=0,y=0,w=0,h=0,r=1,g=1,b=1,a=1,u0=0,v0=0,u1=0,v1=0;
 	_SmartScriptObject pTI(m_pScriptSystem,true);
-	pH->GetParam(1,x);
-	pH->GetParam(2,y);
-	pH->GetParam(3,w);
-	pH->GetParam(4,h);
-	if(!pH->GetParam(5,pTI))
+	if(!pH->GetParam(1,x) || !pH->GetParam(2,y) ||
+		!pH->GetParam(3,w) || !pH->GetParam(4,h) ||
+		!pH->GetParam(5,pTI))
 	{
-		m_pScriptSystem->RaiseError("CScriptObjectRenderer::PushQuad Invalid texinfo");
+		m_pScriptSystem->RaiseError("CScriptObjectRenderer::PushQuad invalid geometry or texinfo");
 		return pH->EndFunction();
 	}
-	pTI->GetAt(1,u0);
-	pTI->GetAt(2,v0);
-	pTI->GetAt(3,u1);
-	pTI->GetAt(4,v1);
+	if(!pTI->GetAt(1,u0) || !pTI->GetAt(2,v0) ||
+		!pTI->GetAt(3,u1) || !pTI->GetAt(4,v1))
+	{
+		m_pScriptSystem->RaiseError("CScriptObjectRenderer::PushQuad invalid texture coordinates");
+		return pH->EndFunction();
+	}
 
 	if(params>5)
 	{
 		if(m_pRenderer->GetFeatures() & RFT_RGBA)
 		{
-			pH->GetParam(6,r);
-			pH->GetParam(7,g);
-			pH->GetParam(8,b);
-			pH->GetParam(9,a);
+			if(!pH->GetParam(6,r) || !pH->GetParam(7,g) ||
+				!pH->GetParam(8,b) || !pH->GetParam(9,a))
+				return pH->EndFunction();
 		}
 		else
 		{
-			pH->GetParam(6,b);
-			pH->GetParam(7,g);
-			pH->GetParam(8,r);
-			pH->GetParam(9,a);
+			if(!pH->GetParam(6,b) || !pH->GetParam(7,g) ||
+				!pH->GetParam(8,r) || !pH->GetParam(9,a))
+				return pH->EndFunction();
 		}
 	}
+	if (m_vBuffer.size() >= 65532)
+	{
+		m_vBuffer.resize(0);
+		m_vIdxBuf.resize(0);
+		m_pScriptSystem->RaiseError("CScriptObjectRenderer::PushQuad batch exceeds 16-bit index range");
+		return pH->EndFunction();
+	}
+	r=CLAMP(r,0.0f,1.0f);
+	g=CLAMP(g,0.0f,1.0f);
+	b=CLAMP(b,0.0f,1.0f);
+	a=CLAMP(a,0.0f,1.0f);
 	_Vtx vtx[4];
 	unsigned short base=m_vBuffer.size();
 
@@ -154,13 +163,36 @@ int CScriptObjectRenderer::Draw(IFunctionHandler *pH)
 		if(pH->GetParamCount()<1)
 		{
 			m_pScriptSystem->RaiseError("CScriptObjectRenderer::Draw wrong number of params");
+			m_vBuffer.resize(0);
+			m_vIdxBuf.resize(0);
 			return pH->EndFunction();
 		}
 		if((!pH->GetParamUDVal(1,tid,cookie)) || (!(cookie==USER_DATA_TEXTURE)))
 		{
+#if defined(__vita__) || defined(LINUX)
+			static bool s_bReportedInvalidHudAtlas = false;
+			if (!s_bReportedInvalidHudAtlas && GetISystem() && GetISystem()->GetILog())
+			{
+				s_bReportedInvalidHudAtlas = true;
+				GetISystem()->GetILog()->LogToFile("\001[VITA][HUDATLAS] rejected texture userdata: cookie=%d verts=%u indices=%u",
+					cookie, (unsigned)m_vBuffer.size(), (unsigned)m_vIdxBuf.size());
+			}
+#endif
 			m_pScriptSystem->RaiseError("CScriptObjectRenderer::Draw invalid texture");
+			m_vBuffer.resize(0);
+			m_vIdxBuf.resize(0);
 			return pH->EndFunction();
 		}
+
+#if defined(__vita__) || defined(LINUX)
+		static bool s_bReportedHudAtlas = false;
+		if (!s_bReportedHudAtlas && GetISystem() && GetISystem()->GetILog())
+		{
+			s_bReportedHudAtlas = true;
+			GetISystem()->GetILog()->LogToFile("\001[VITA][HUDATLAS] submit texture=%u verts=%u indices=%u",
+				(unsigned)tid, (unsigned)m_vBuffer.size(), (unsigned)m_vIdxBuf.size());
+		}
+#endif
 
 		//m_pRenderer->ResetToDefault();
 		m_pRenderer->Set2DMode(true,800,600);

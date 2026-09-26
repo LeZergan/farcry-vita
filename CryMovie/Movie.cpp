@@ -665,10 +665,24 @@ void CMovieSystem::Update( float dt )
 	}
 #endif
 
-	PlayingSequences::iterator next;
-	for (PlayingSequences::iterator it = m_playingSequences.begin(); it != m_playingSequences.end(); it = next)
+	/* Sequence events are allowed to stop the current sequence -- or all
+	   sequences -- from inside Animate().  A cached std::list iterator survives
+	   erasing the current element, but not StopAllSequences erasing the element
+	   it points to next.  Iterate a pointer snapshot and re-find each live entry
+	   so event-driven movie control cannot resume through an invalid iterator. */
+	std::vector<IAnimSequence*> updateSequences;
+	updateSequences.reserve(m_playingSequences.size());
+	for (PlayingSequences::const_iterator sit=m_playingSequences.begin();
+		sit!=m_playingSequences.end(); ++sit)
+		updateSequences.push_back(sit->sequence);
+
+	for (std::vector<IAnimSequence*>::iterator uit=updateSequences.begin();
+		uit!=updateSequences.end(); ++uit)
 	{
-		next = it; ++next;
+		PlayingSequences::iterator it=m_playingSequences.begin();
+		for (; it!=m_playingSequences.end() && it->sequence!=*uit; ++it) {}
+		if (it==m_playingSequences.end())
+			continue;
 
 		PlayingSequence &ps = *it;
 
@@ -696,10 +710,15 @@ void CMovieSystem::Update( float dt )
 			}
 			else
 			{
-				// If no out-of-range type specified sequence stopped when time reaches end of range.
-				// Que sequence for stopping.
+				/* Always evaluate the authored terminal sample before stopping.  The
+				   old continue skipped Animate() on the crossing update, so the final
+				   character pose and every event placed at the end of a cut scene were
+				   silently lost.  At low frame rates that also made the visible motion
+				   end one whole frame before the sequence clock/audio. */
+				ac.dt = max(0.0f, timeRange.end - ac.time);
+				ac.time = timeRange.end;
+				ps.time = timeRange.end;
 				stopSequences.push_back(ps.sequence);
-				continue;
 			}
 		}
 
