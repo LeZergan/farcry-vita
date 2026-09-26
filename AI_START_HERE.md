@@ -2,6 +2,23 @@
 
 Prepared 2026-09-26. This is a native source port, not an Android loader.
 
+## Preparation verification
+
+On 2026-09-26 the canonical release build completed all 522 Ninja steps on the
+local VitaSDK. All 20 lab unit tests and the radar math check passed. Package
+CRC, expected three entries, title `FCRY00002`, extended-memory attribute 12,
+and exact packaged-executable match to the fresh SELF were verified.
+
+- VPK: `engine_port/vita_kit/FarCry.vpk`
+- VPK SHA-256: `fbcbad18a8bf61c95538fecbde5a4e1514fd090b43cdf749efd592b88c627d6a`
+- Eboot SHA-256: `a5353c0382710283911687130a4c743d7bc0c0c861d5cd91a8d606383a02ffc8`
+- Build inputs: preparation source checkpoint `2ba5332`; subsequent commits
+  only document the reference assessment and these results.
+
+The build still emits legacy compatibility/deprecation warnings. No fresh Vita
+or emulator gameplay run was performed during preparation. Retail-asset tests
+were not run. Build success does not resolve the known runtime issues below.
+
 ## Active code
 
 | Area | Entry points |

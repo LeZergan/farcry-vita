@@ -24,7 +24,10 @@ lines 3831-3836) and commits per-pass texture/blend state. This is useful as a
 semantic reference for `VitaRenderer.cpp` and `LeafBufferVita.cpp`, which already
 contain object lightmap selection and a compact fixed-function implementation.
 Much of this is inherited Crytek code, not necessarily a new Android fix.
-Compare against our original `XRenderOGL` files before crediting or copying a fix.
+A direct line comparison found about 99.2% similarity between that pipeline
+file and our existing original `XRenderOGL/GLRendPipeline.cpp`. Most of this
+reference is therefore already available locally. Compare specific changed
+hunks before crediting or copying a new Android fix.
 
 [OpenALSound.cpp](https://github.com/Player124413/NearChuckle-android-edition/blob/82b2aca74e3f7904cf61ae72f69cef9ba614ea9f/SourceCode/CrySoundSystem/OpenALSound.cpp)
 stores each stream's actual sample rate, supplies it to `alBufferData`, and
