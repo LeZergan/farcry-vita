@@ -52,6 +52,9 @@ water, firefights and long-session stability need fresh hardware confirmation.
 The next gameplay work should begin with a reproducible issue and matching log,
 capture and binary hash, then patch its smallest demonstrated cause.
 
+See `docs/NEARCHUCKLE_REUSE.md` for the pinned Android reference assessment and
+ranked adaptation candidates. No code from that project has been imported.
+
 The preparation branch checkpoints pre-existing renderer, physics, animation,
 input, radar and video changes rather than presenting them as new fixes.
 
